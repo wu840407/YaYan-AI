@@ -164,6 +164,30 @@ def _vote_routing(
     return weighted.most_common(1)[0][0]
 
 
+# v4.7-B：被視為「LID 確實判出語言」的 method（作為 speaker_inherit 的 anchor）
+_LID_ANCHOR_METHODS = (
+    "lid", "ensemble_agree", "ensemble_vox", "ensemble_whisper",
+)
+
+
+def _ensemble_lid(
+    r1: str, c1: float, r2: str, c2: float,
+) -> Tuple[str, float, str]:
+    """v4.7-B：VoxLingua107(r1,c1) 與 Whisper(r2,c2) 兩個 LID 投票。
+
+    - 一致：取兩者較高的信心並再加成（封頂 1.0），method=ensemble_agree。
+    - 不一致：取信心較高的那一個 routing，但信心打折（兩模型分歧 → 降低可信度），
+      method 標明採用了哪個來源（ensemble_vox / ensemble_whisper）。
+    """
+    AGREE_BOOST = 1.15
+    DISAGREE_PENALTY = 0.7
+    if r1 == r2:
+        return r1, min(1.0, max(c1, c2) * AGREE_BOOST), "ensemble_agree"
+    if c1 >= c2:
+        return r1, c1 * DISAGREE_PENALTY, "ensemble_vox"
+    return r2, c2 * DISAGREE_PENALTY, "ensemble_whisper"
+
+
 def _batched_translate(
     text_lines: List[str],
     source_language: str,
@@ -254,9 +278,15 @@ def transcribe_audio(
         # v4.7-A：逐段 LID 借前後 context（可由 config 關閉）
         use_lid_context = asr_cfg.get("enable_lid_context", False)
         lid_context_sec = float(asr_cfg.get("lid_context_sec", 1.5))
+        # v4.7-B：LID Ensemble（VoxLingua107 + Whisper 投票，可由 config 關閉）
+        use_ensemble = asr_cfg.get("enable_lid_ensemble", False)
+        _lid_whisper = None
+        if use_ensemble:
+            from . import lid_whisper as _lid_whisper
         logger.info(
             f"逐段 LID（{len(chunks)} 段）... "
-            f"context={'±%.1fs' % lid_context_sec if use_lid_context else 'off'}"
+            f"context={'±%.1fs' % lid_context_sec if use_lid_context else 'off'}, "
+            f"ensemble={'on' if use_ensemble else 'off'}"
         )
         for i, (start, end, chunk) in enumerate(chunks):
             seg_dur = end - start
@@ -271,9 +301,16 @@ def transcribe_audio(
                 else:
                     lid_audio = chunk
                 rt, conf = _lid_mod.detect(lid_audio, sample_rate=sr)
+                sub_method = "lid"
+                if use_ensemble:
+                    try:
+                        w_rt, w_conf = _lid_whisper.detect(lid_audio, sample_rate=sr)
+                        rt, conf, sub_method = _ensemble_lid(rt, conf, w_rt, w_conf)
+                    except Exception as e:
+                        logger.debug(f"段 {i} Whisper-LID 失敗，退回 VoxLingua: {e}")
                 threshold = _dynamic_lid_threshold(seg_dur)
                 if conf >= threshold:
-                    seg_routings.append((rt, conf, "lid"))
+                    seg_routings.append((rt, conf, sub_method))
                 else:
                     seg_routings.append(("auto", conf, "low_conf"))
             except Exception as e:
@@ -306,7 +343,7 @@ def transcribe_audio(
             if speaker == last_speaker and method in ("low_conf", "lid_error", "fallback"):
                 if last_routing:
                     seg_routings[i] = (last_routing, conf, "speaker_inherit")
-            if method == "lid" and conf >= 0.6:
+            if method in _LID_ANCHOR_METHODS and conf >= 0.6:
                 last_speaker = speaker
                 last_routing = current_routing
 

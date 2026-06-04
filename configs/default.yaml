@@ -27,6 +27,7 @@ asr:
   enable_lid: true
   enable_lid_context: true       # v4.7-A：逐段 LID 借前後 context（短段信心提升）
   lid_context_sec: 1.5           # v4.7-A：LID 時前後各向完整音檔借的秒數
+  enable_lid_ensemble: false     # v4.7-B：VoxLingua107 + Whisper LID 投票（預設關，待 baseline 驗證後再開）
   enable_diarize: true
   default_alias: YaYan_ASR_Dialect
   routing:
