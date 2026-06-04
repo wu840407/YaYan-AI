@@ -121,6 +121,27 @@ def _fmt_time(sec: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def _slice_with_context(
+    audio: np.ndarray,
+    start: float,
+    end: float,
+    sample_rate: int,
+    context_sec: float,
+) -> np.ndarray:
+    """v4.7-A：取 [start, end] 並向前後各借 context_sec 秒的音訊。
+
+    只用於 LID 語言判斷：短段借鄰近 context 後，VoxLingua107 的信心更穩，
+    減少混合語音逐段判錯。**不影響 ASR 切段**（ASR 仍用原本的 VAD chunk）。
+    邊界自動夾在 [0, 全長] 內。
+    """
+    total_sec = len(audio) / sample_rate
+    ctx_start = max(0.0, start - context_sec)
+    ctx_end = min(total_sec, end + context_sec)
+    i0 = int(round(ctx_start * sample_rate))
+    i1 = int(round(ctx_end * sample_rate))
+    return audio[i0:i1]
+
+
 def _dynamic_lid_threshold(seg_dur_sec: float) -> float:
     if seg_dur_sec < 2.0:
         return 0.40
@@ -230,14 +251,26 @@ def transcribe_audio(
     seg_routings: List[Tuple[str, float, str]] = []
 
     if enable_lid:
-        logger.info(f"逐段 LID（{len(chunks)} 段）...")
+        # v4.7-A：逐段 LID 借前後 context（可由 config 關閉）
+        use_lid_context = asr_cfg.get("enable_lid_context", False)
+        lid_context_sec = float(asr_cfg.get("lid_context_sec", 1.5))
+        logger.info(
+            f"逐段 LID（{len(chunks)} 段）... "
+            f"context={'±%.1fs' % lid_context_sec if use_lid_context else 'off'}"
+        )
         for i, (start, end, chunk) in enumerate(chunks):
             seg_dur = end - start
             if seg_dur < 0.5:
                 seg_routings.append(("auto", 0.0, "too_short"))
                 continue
             try:
-                rt, conf = _lid_mod.detect(chunk, sample_rate=sr)
+                if use_lid_context:
+                    lid_audio = _slice_with_context(
+                        audio, start, end, sr, lid_context_sec
+                    )
+                else:
+                    lid_audio = chunk
+                rt, conf = _lid_mod.detect(lid_audio, sample_rate=sr)
                 threshold = _dynamic_lid_threshold(seg_dur)
                 if conf >= threshold:
                     seg_routings.append((rt, conf, "lid"))
