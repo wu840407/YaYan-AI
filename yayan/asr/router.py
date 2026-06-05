@@ -30,6 +30,14 @@ DOLPHIN_ROUTINGS = {
     "min", "hokkien",  # 別名
 }
 
+# v4.7-C：台語專用 ASR 觸發的 routing key（預設值，可由 config 覆寫）
+_DEFAULT_TAIGI_ROUTINGS = {"nan", "nan-cs", "nan-hn", "min", "hokkien"}
+
+
+def _taigi_routings() -> set:
+    cfg = CONFIG["asr"].get("taigi_routings")
+    return {str(r).lower() for r in cfg} if cfg else _DEFAULT_TAIGI_ROUTINGS
+
 
 @dataclass
 class WordTS:
@@ -59,6 +67,13 @@ def transcribe(
     routing = (routing or "auto").lower()
     logger.info(f"路由 → routing={routing}")
 
+    # v4.7-C：台語(nan)專用 ASR（預設關）。載入/識別失敗自動退回 Dolphin。
+    if CONFIG["asr"].get("enable_taigi_asr", False) and routing in _taigi_routings():
+        try:
+            return _taigi_transcribe(audio, routing, chunk_start_sec)
+        except Exception as e:
+            logger.warning(f"台語專用 ASR 失敗，退回 Dolphin（routing={routing}）: {e}")
+
     if routing in DOLPHIN_ROUTINGS or routing == "auto":
         # 包含 auto → Dolphin 自己會做 LID
         return _dolphin_transcribe(audio, routing, chunk_start_sec)
@@ -85,6 +100,20 @@ def _dolphin_transcribe(
         asr_alias="YaYan_ASR_Dialect",
         routing=routing,
         words=words,
+    )
+
+
+def _taigi_transcribe(
+    audio: np.ndarray, routing: str, chunk_start_sec: float,
+) -> ASRResult:
+    """v4.7-C：台語專用 Whisper-medium-zh-tw。回傳純文字（無 word timestamp）。"""
+    from . import whisper_taigi as _taigi
+    text = _taigi.transcribe(audio, language_hint=routing)
+    return ASRResult(
+        text=text,
+        asr_alias="YaYan_ASR_Taigi",
+        routing=routing,
+        words=[],
     )
 
 

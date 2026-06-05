@@ -20,6 +20,7 @@ OPTIONAL = [
     ("YaYan_Diarize",        False,    1,  "pyannote speaker-diarization-3.1"),
     ("YaYan_Diarize_Seg",    False,    1,  "pyannote segmentation-3.0"),
     ("YaYan_Diarize_Embed",  False,    5,  "pyannote wespeaker"),
+    ("YaYan_ASR_Taigi",      False,  500,  "v4.7-C 台語專用 Whisper-medium（預設停用，缺失退回 Dolphin）"),
 ]
 
 

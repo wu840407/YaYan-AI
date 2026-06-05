@@ -40,6 +40,16 @@ models:
     note: "Whisper-large-v3 - 99 種語言，含日韓歐美中東東南亞"
     languages: [ja, ko, fa, ur, ar, hi, en, fr, de, ru, es, th, ms, vi, id]
 
+  YaYan_ASR_Taigi:
+    real_id: luigisaetta/whisper-medium-zh-tw
+    local_dir: YaYan_ASR_Taigi
+    role: asr_taiwanese_hokkien
+    license: Apache-2.0
+    size_gb: 1.5
+    note: "v4.7-C 台語(閩南語)專用 Whisper-medium 微調；預設停用(enable_taigi_asr)，
+           離線環境需手動將權重放入 local_dir 才能啟用，缺失時自動退回 Dolphin"
+    languages: [nan, nan-cs, nan-hn]
+
   # ============= LID =============
   YaYan_LID:
     real_id: speechbrain/lang-id-voxlingua107-ecapa
