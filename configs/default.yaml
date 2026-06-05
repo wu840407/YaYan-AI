@@ -28,7 +28,7 @@ asr:
   enable_lid_context: true       # v4.7-A：逐段 LID 借前後 context（短段信心提升）
   lid_context_sec: 1.5           # v4.7-A：LID 時前後各向完整音檔借的秒數
   enable_lid_ensemble: false     # v4.7-B：VoxLingua107 + Whisper LID 投票（預設關，待 baseline 驗證後再開）
-  enable_taigi_asr: false        # v4.7-C：台語(nan)改走專用 Whisper-medium-zh-tw（預設關；需先離線放入 YaYan_ASR_Taigi 權重，缺失自動退回 Dolphin）
+  enable_taigi_asr: true         # v4.7-C：台語(nan)改走專用 Breeze-ASR-26（已離線放入權重並驗證；缺失自動退回 Dolphin）
   taigi_routings: [nan, nan-cs, nan-hn]   # v4.7-C：觸發台語專用 ASR 的 routing key
   enable_diarize: true
   default_alias: YaYan_ASR_Dialect
