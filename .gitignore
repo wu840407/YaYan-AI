@@ -90,3 +90,7 @@ yayan_logs/
 *.bin.bak
 *.safetensors.bak
 
+CLAUDE.md
+
+# 部署暫存筆記（含內部主機名的執行紀錄，勿入庫）
+deploy/新文字文件.txt
