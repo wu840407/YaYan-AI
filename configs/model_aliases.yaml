@@ -40,6 +40,20 @@ models:
     note: "Whisper-large-v3 - 99 種語言，含日韓歐美中東東南亞"
     languages: [ja, ko, fa, ur, ar, hi, en, fr, de, ru, es, th, ms, vi, id]
 
+  YaYan_ASR_Taigi:
+    real_id: MediaTek-Research/Breeze-ASR-26
+    local_dir: YaYan_ASR_Taigi
+    role: asr_taiwanese_hokkien
+    license: Apache-2.0
+    size_gb: 3.0
+    note: "v4.7-C 台語(閩南語/Taigi)專用 ASR。Breeze-ASR-26：whisper-large-v2 微調
+           ~1萬小時台語，輸出漢字，Apache-2.0(軍政府部署可用)。預設停用
+           (enable_taigi_asr)，離線環境需手動將權重放入 local_dir，缺失自動退回 Dolphin。
+           註：CLAUDE.md 原寫 luigisaetta/whisper-medium-zh-tw 該 repo 不存在且 zh-tw 為
+           台灣國語非台語，已更正。備選 NUTN-KWS/Whisper-Taiwanese-model-v0.5 為 CC-BY-NC，
+           商業/政府用途受限。"
+    languages: [nan, nan-cs, nan-hn]
+
   # ============= LID =============
   YaYan_LID:
     real_id: speechbrain/lang-id-voxlingua107-ecapa

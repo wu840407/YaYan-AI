@@ -121,6 +121,27 @@ def _fmt_time(sec: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def _slice_with_context(
+    audio: np.ndarray,
+    start: float,
+    end: float,
+    sample_rate: int,
+    context_sec: float,
+) -> np.ndarray:
+    """v4.7-A：取 [start, end] 並向前後各借 context_sec 秒的音訊。
+
+    只用於 LID 語言判斷：短段借鄰近 context 後，VoxLingua107 的信心更穩，
+    減少混合語音逐段判錯。**不影響 ASR 切段**（ASR 仍用原本的 VAD chunk）。
+    邊界自動夾在 [0, 全長] 內。
+    """
+    total_sec = len(audio) / sample_rate
+    ctx_start = max(0.0, start - context_sec)
+    ctx_end = min(total_sec, end + context_sec)
+    i0 = int(round(ctx_start * sample_rate))
+    i1 = int(round(ctx_end * sample_rate))
+    return audio[i0:i1]
+
+
 def _dynamic_lid_threshold(seg_dur_sec: float) -> float:
     if seg_dur_sec < 2.0:
         return 0.40
@@ -141,6 +162,30 @@ def _vote_routing(
     for r, c in valid:
         weighted[r] += c
     return weighted.most_common(1)[0][0]
+
+
+# v4.7-B：被視為「LID 確實判出語言」的 method（作為 speaker_inherit 的 anchor）
+_LID_ANCHOR_METHODS = (
+    "lid", "ensemble_agree", "ensemble_vox", "ensemble_whisper",
+)
+
+
+def _ensemble_lid(
+    r1: str, c1: float, r2: str, c2: float,
+) -> Tuple[str, float, str]:
+    """v4.7-B：VoxLingua107(r1,c1) 與 Whisper(r2,c2) 兩個 LID 投票。
+
+    - 一致：取兩者較高的信心並再加成（封頂 1.0），method=ensemble_agree。
+    - 不一致：取信心較高的那一個 routing，但信心打折（兩模型分歧 → 降低可信度），
+      method 標明採用了哪個來源（ensemble_vox / ensemble_whisper）。
+    """
+    AGREE_BOOST = 1.15
+    DISAGREE_PENALTY = 0.7
+    if r1 == r2:
+        return r1, min(1.0, max(c1, c2) * AGREE_BOOST), "ensemble_agree"
+    if c1 >= c2:
+        return r1, c1 * DISAGREE_PENALTY, "ensemble_vox"
+    return r2, c2 * DISAGREE_PENALTY, "ensemble_whisper"
 
 
 def _batched_translate(
@@ -230,17 +275,42 @@ def transcribe_audio(
     seg_routings: List[Tuple[str, float, str]] = []
 
     if enable_lid:
-        logger.info(f"逐段 LID（{len(chunks)} 段）...")
+        # v4.7-A：逐段 LID 借前後 context（可由 config 關閉）
+        use_lid_context = asr_cfg.get("enable_lid_context", False)
+        lid_context_sec = float(asr_cfg.get("lid_context_sec", 1.5))
+        # v4.7-B：LID Ensemble（VoxLingua107 + Whisper 投票，可由 config 關閉）
+        use_ensemble = asr_cfg.get("enable_lid_ensemble", False)
+        _lid_whisper = None
+        if use_ensemble:
+            from . import lid_whisper as _lid_whisper
+        logger.info(
+            f"逐段 LID（{len(chunks)} 段）... "
+            f"context={'±%.1fs' % lid_context_sec if use_lid_context else 'off'}, "
+            f"ensemble={'on' if use_ensemble else 'off'}"
+        )
         for i, (start, end, chunk) in enumerate(chunks):
             seg_dur = end - start
             if seg_dur < 0.5:
                 seg_routings.append(("auto", 0.0, "too_short"))
                 continue
             try:
-                rt, conf = _lid_mod.detect(chunk, sample_rate=sr)
+                if use_lid_context:
+                    lid_audio = _slice_with_context(
+                        audio, start, end, sr, lid_context_sec
+                    )
+                else:
+                    lid_audio = chunk
+                rt, conf = _lid_mod.detect(lid_audio, sample_rate=sr)
+                sub_method = "lid"
+                if use_ensemble:
+                    try:
+                        w_rt, w_conf = _lid_whisper.detect(lid_audio, sample_rate=sr)
+                        rt, conf, sub_method = _ensemble_lid(rt, conf, w_rt, w_conf)
+                    except Exception as e:
+                        logger.debug(f"段 {i} Whisper-LID 失敗，退回 VoxLingua: {e}")
                 threshold = _dynamic_lid_threshold(seg_dur)
                 if conf >= threshold:
-                    seg_routings.append((rt, conf, "lid"))
+                    seg_routings.append((rt, conf, sub_method))
                 else:
                     seg_routings.append(("auto", conf, "low_conf"))
             except Exception as e:
@@ -273,7 +343,7 @@ def transcribe_audio(
             if speaker == last_speaker and method in ("low_conf", "lid_error", "fallback"):
                 if last_routing:
                     seg_routings[i] = (last_routing, conf, "speaker_inherit")
-            if method == "lid" and conf >= 0.6:
+            if method in _LID_ANCHOR_METHODS and conf >= 0.6:
                 last_speaker = speaker
                 last_routing = current_routing
 
