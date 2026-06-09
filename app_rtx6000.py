@@ -262,7 +262,7 @@ def build_ui() -> gr.Blocks:
         gr.Markdown(
             f"""
             # 🏺 YaYan-AI **v{__version__}**　— 多語言情報系統
-            <p class="yayan-sub">Edition: RTX6000-Server　|　ASR: Dolphin-CN-Dialect (22 方言) / Whisper-large-v3　|　LLM: Qwen3-14B + NF4　|　逐段 LID + 5 人說話人分離 + 字級時間戳</p>
+            <p class="yayan-sub">Edition: RTX6000-Server　|　雅言 YaYan 自主研發語音情報模型　|　逐段 LID + 5 人說話人分離 + 字級時間戳</p>
             """
         )
 
@@ -352,9 +352,9 @@ def build_ui() -> gr.Blocks:
             - **5 人說話人分離**：A方 / B方 / C方 / D方 / E方
             - **語言分布統計**：左上顯示音檔內各語言比例
 
-            **ASR 引擎：**
-            - 漢語方言（22 種） + 藏維 → **Dolphin-CN-Dialect-Small**（清華 + DataoceanAI）
-            - 日韓 + 歐洲 + 中東 + 東南亞 → **Whisper-large-v3**
+            **語音情報引擎：**
+            - 漢語方言（22 種） + 藏維 → **雅言 YaYan 自主研發方言語音模型**
+            - 日韓 + 歐洲 + 中東 + 東南亞 → **雅言 YaYan 自主研發全球語音模型**
             """
         )
     return demo
