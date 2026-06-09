@@ -1,7 +1,7 @@
 # YaYan-AI v4.6 主設定檔
 project:
   name: YaYan-AI
-  version: "4.6.0"
+  version: "5.0.0"
   edition: "RTX6000-Server"
 
 paths:
@@ -101,12 +101,29 @@ diarize:
   min_speakers: 1
   max_speakers: 5
 
+# V5.0 M2：聲紋語者識別（預設關，不影響現有 A/B/C 行為）
+speaker_id:
+  enable_speaker_id: false         # ★ 預設 false：轉錄時不做自動識別，行為與 v4.7 完全相同
+  embedding_dim: 256               # wespeaker resnet34 實測維度（建表 vector(N) 用）
+  db:
+    host: localhost
+    port: 5432
+    dbname: yayan_voiceprint
+    user: yayan
+    password_env: YAYAN_VP_DB_PASSWORD   # ★ 實際密碼一律走此環境變數（勿把密碼寫進本檔）
+    password_default: ""                 # 不存實密於 git；本機/正式皆 export YAYAN_VP_DB_PASSWORD
+  threshold_high: 0.70             # similarity ≥ → 標姓名 [張三 ...]
+  threshold_mid: 0.55              # similarity ≥ → 標「疑似_張三(0.65)」，以下退回 A方
+  top_k: 5                         # 相似度搜尋取前 k 筆
+  hnsw_ef_search: 100              # HNSW 查詢 ef_search（越大越準越慢）
+  enroll_unknown: true             # 辨識不出時自動建「未知語者_時間戳」待命名
+
 postprocess:
   use_opencc: true
   opencc_config: s2twp.json
 
 server:
-  host: 0.0.0.0
+  host: 127.0.0.1          # 只聽 localhost：外部一律走 Nginx 443 HTTPS，封死 7860 直連
   port: 7860
   share: false
   show_internal_names: false

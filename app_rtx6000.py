@@ -24,6 +24,8 @@ logging.basicConfig(
 )
 
 import gradio as gr
+import numpy as np
+import librosa
 
 from yayan import __version__
 from yayan.config import CONFIG
@@ -33,6 +35,8 @@ from yayan.pipeline import (
     warmup,
     TranscriptionResult,
 )
+# V5.0 M2：聲紋語者識別（底層模組；UI「語者管理」分頁用）
+from yayan import speaker_db, voiceprint
 
 
 # ★ v4.6: 22 中文方言全部展開
@@ -244,6 +248,122 @@ def fn_save_as(translated_text, source_audio):
     return str(out)
 
 
+# ─────────────────────── V5.0 M2：語者管理分頁 callbacks ───────────────────────
+# 這些函式只操作 speaker_db / voiceprint，完全不碰上面的轉錄 callback。
+
+SPEAKER_PAGE_SIZE = 20
+SPEAKER_LIST_HEADERS = ["ID", "姓名/代號", "樣本數", "備註", "建檔時間", "更新時間"]
+
+
+def _load_sample_audio(path):
+    """讀取單一語音樣本檔，回傳 (mono float32 audio, sample_rate)。"""
+    sr = CONFIG["audio"]["sample_rate"]
+    y, _ = librosa.load(path, sr=sr, mono=True)
+    peak = float(np.max(np.abs(y))) if y.size else 0.0
+    if peak > 0:
+        y = y / peak
+    return y.astype(np.float32), sr
+
+
+def _fmt_dt(dt):
+    return dt.strftime("%Y-%m-%d %H:%M") if dt else ""
+
+
+def _render_speaker_list(page, keyword):
+    """回傳 (dataframe 列資料, 頁碼資訊文字, 修正後頁碼)；DB 失敗不讓整個 app 掛掉。"""
+    try:
+        try:
+            page = int(page)
+        except (TypeError, ValueError):
+            page = 1
+        kw = (keyword or "").strip()
+        rows, total = speaker_db.list_speakers(
+            page=page, page_size=SPEAKER_PAGE_SIZE, keyword=kw
+        )
+        max_page = max(1, (total + SPEAKER_PAGE_SIZE - 1) // SPEAKER_PAGE_SIZE)
+        if page > max_page:
+            page = max_page
+            rows, total = speaker_db.list_speakers(
+                page=page, page_size=SPEAKER_PAGE_SIZE, keyword=kw
+            )
+        data = [
+            [r["id"], r["name"], r["sample_count"], r["note"],
+             _fmt_dt(r["created_at"]), _fmt_dt(r["updated_at"])]
+            for r in rows
+        ]
+        info = f"第 {page} / {max_page} 頁　共 {total} 位語者"
+        return data, info, page
+    except Exception as e:
+        logging.exception("語者列表讀取失敗")
+        return [], f"⚠️ 資料庫讀取失敗：{e}", 1
+
+
+def fn_speaker_enroll(name, note, files, page, keyword):
+    name = (name or "").strip()
+    if not name:
+        data, info, page = _render_speaker_list(page, keyword)
+        return "⚠️ 請先輸入姓名/代號。", data, info, page
+    if not files:
+        data, info, page = _render_speaker_list(page, keyword)
+        return "⚠️ 請至少上傳一段語音樣本。", data, info, page
+
+    paths = [getattr(f, "name", f) for f in files]
+    vecs = []
+    for p in paths:
+        try:
+            y, sr = _load_sample_audio(p)
+            v = voiceprint.extract(y, sample_rate=sr)
+            if v is not None:
+                vecs.append(v)
+        except Exception as e:
+            logging.warning(f"樣本抽聲紋失敗 {p}: {e}")
+
+    if not vecs:
+        data, info, page = _render_speaker_list(page, keyword)
+        return "❌ 所有樣本都抽不出有效聲紋（太短或無語音）。", data, info, page
+
+    try:
+        sid = speaker_db.add_speaker(
+            name, vecs[0], note=(note or "").strip(), source="enroll"
+        )
+        for v in vecs[1:]:
+            speaker_db.add_sample(sid, v, source="enroll")
+    except Exception as e:
+        logging.exception("建檔失敗")
+        data, info, page = _render_speaker_list(page, keyword)
+        return f"❌ 建檔失敗：{e}", data, info, page
+
+    data, info, page = _render_speaker_list(page, keyword)
+    return f"✅ 已建檔語者 #{sid}「{name}」，採用 {len(vecs)} 段樣本。", data, info, page
+
+
+def fn_speaker_delete(speaker_id, page, keyword):
+    try:
+        sid = int(speaker_id)
+    except (TypeError, ValueError):
+        data, info, page = _render_speaker_list(page, keyword)
+        return "⚠️ 請輸入有效的語者 ID。", data, info, page
+    sp = speaker_db.get_speaker(sid)
+    if not sp:
+        data, info, page = _render_speaker_list(page, keyword)
+        return f"⚠️ 找不到語者 #{sid}。", data, info, page
+    speaker_db.delete_speaker(sid)
+    data, info, page = _render_speaker_list(page, keyword)
+    return f"🗑️ 已刪除語者 #{sid}「{sp['name']}」。", data, info, page
+
+
+def fn_speaker_search(keyword):
+    return _render_speaker_list(1, keyword)
+
+
+def fn_speaker_page(delta, page, keyword):
+    try:
+        page = int(page)
+    except (TypeError, ValueError):
+        page = 1
+    return _render_speaker_list(max(1, page + delta), keyword)
+
+
 CSS = """
 .yayan-title { font-size: 1.5em; font-weight: 600; }
 .yayan-sub   { color: #888; font-size: 0.9em; }
@@ -266,97 +386,188 @@ def build_ui() -> gr.Blocks:
             """
         )
 
-        with gr.Row():
-            with gr.Column(scale=1):
-                audio_input = gr.Audio(
-                    sources=["upload", "microphone"],
-                    type="filepath",
-                    label="🎤 上傳或錄製音檔",
-                )
-                dialect = gr.Dropdown(
-                    choices=DIALECT_CHOICES,
-                    value="🔍 自動偵測（建議：逐段 LID）",
-                    label="來源語言",
-                )
-                enable_diarize = gr.Checkbox(
-                    label="啟用說話人分離（A方/B方/C方/D方/E方）",
-                    value=True,
-                )
-                transcribe_btn = gr.Button("🚀 開始轉錄翻譯", variant="primary", size="lg")
-                info_box = gr.Textbox(label="識別資訊", interactive=False, lines=3)
+        with gr.Tabs():
+            # ───────── Tab 1：轉錄翻譯（v4.7 原樣，僅多包一層 Tab）─────────
+            with gr.Tab("🎙️ 轉錄翻譯"):
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        audio_input = gr.Audio(
+                            sources=["upload", "microphone"],
+                            type="filepath",
+                            label="🎤 上傳或錄製音檔",
+                        )
+                        dialect = gr.Dropdown(
+                            choices=DIALECT_CHOICES,
+                            value="🔍 自動偵測（建議：逐段 LID）",
+                            label="來源語言",
+                        )
+                        enable_diarize = gr.Checkbox(
+                            label="啟用說話人分離（A方/B方/C方/D方/E方）",
+                            value=True,
+                        )
+                        transcribe_btn = gr.Button("🚀 開始轉錄翻譯", variant="primary", size="lg")
+                        info_box = gr.Textbox(label="識別資訊", interactive=False, lines=3)
 
-                confidence_box = gr.Textbox(
-                    label="🎯 識別精準度",
-                    value="—",
-                    interactive=False,
-                    lines=2,
-                    elem_classes=["confidence-box"],
+                        confidence_box = gr.Textbox(
+                            label="🎯 識別精準度",
+                            value="—",
+                            interactive=False,
+                            lines=2,
+                            elem_classes=["confidence-box"],
+                        )
+
+                    with gr.Column(scale=2):
+                        gr.Markdown("### 📜 識別原文（可編輯，含時間戳）")
+                        raw_text_display = gr.State("")
+                        raw_text_box = gr.Textbox(
+                            label="ASR 原文",
+                            lines=10,
+                            interactive=True,
+                            placeholder="格式：[A方 00:01-00:05] 你好",
+                        )
+
+                        gr.Markdown("### 🇹🇼 台灣正體中文譯文（可編輯）")
+                        translated_box = gr.Textbox(
+                            label="譯文",
+                            lines=10,
+                            interactive=True,
+                            placeholder="翻譯結果會保留 [A方 00:01-00:05] 標籤",
+                        )
+
+                        with gr.Row():
+                            refine_raw_btn = gr.Button("🔄 依【編輯後原文】重新翻譯潤飾", variant="secondary")
+                            refine_translated_btn = gr.Button("✨ 依【編輯後譯文】重新潤飾", variant="secondary")
+
+                        save_btn = gr.Button("💾 另存新檔", variant="primary")
+                        save_file = gr.File(
+                            label="📁 點擊下方檔案連結即可選擇儲存位置",
+                            interactive=False,
+                        )
+
+                transcribe_btn.click(
+                    fn=fn_transcribe,
+                    inputs=[audio_input, dialect, enable_diarize],
+                    outputs=[info_box, raw_text_display, raw_text_box, translated_box, confidence_box],
+                )
+                refine_raw_btn.click(
+                    fn=fn_refine,
+                    inputs=[raw_text_display, raw_text_box, dialect],
+                    outputs=[translated_box],
+                )
+                refine_translated_btn.click(
+                    fn=fn_refine,
+                    inputs=[raw_text_display, translated_box, dialect],
+                    outputs=[translated_box],
+                )
+                save_btn.click(
+                    fn=fn_save_as,
+                    inputs=[translated_box, audio_input],
+                    outputs=[save_file],
                 )
 
-            with gr.Column(scale=2):
-                gr.Markdown("### 📜 識別原文（可編輯，含時間戳）")
-                raw_text_display = gr.State("")
-                raw_text_box = gr.Textbox(
-                    label="ASR 原文",
-                    lines=10,
-                    interactive=True,
-                    placeholder="格式：[A方 00:01-00:05] 你好",
+                gr.Markdown(
+                    """
+                    ---
+                    **v4.6 新功能：**
+                    - **22 種中文方言**：含福州話、客家話、湘贛晉、潮汕、海南、蘇杭吳語細分等
+                    - **字級時間戳**：每段顯示 `[A方 00:01-00:05] 內容`
+                    - **逐段語言識別**：混合語音每段獨立判斷
+                    - **5 人說話人分離**：A方 / B方 / C方 / D方 / E方
+                    - **語言分布統計**：左上顯示音檔內各語言比例
+
+                    **語音情報引擎：**
+                    - 漢語方言（22 種） + 藏維 → **雅言 YaYan 自主研發方言語音模型**
+                    - 日韓 + 歐洲 + 中東 + 東南亞 → **雅言 YaYan 自主研發全球語音模型**
+                    """
                 )
 
-                gr.Markdown("### 🇹🇼 台灣正體中文譯文（可編輯）")
-                translated_box = gr.Textbox(
-                    label="譯文",
-                    lines=10,
-                    interactive=True,
-                    placeholder="翻譯結果會保留 [A方 00:01-00:05] 標籤",
+            # ───────── Tab 2：語者管理（V5.0 M2 新增）─────────
+            with gr.Tab("👤 語者管理"):
+                gr.Markdown(
+                    "### 👤 聲紋語者管理　"
+                    "<span class='yayan-sub'>上傳語音樣本建檔聲紋，供轉錄時自動識別說話人</span>"
                 )
+                sp_page = gr.State(1)
 
                 with gr.Row():
-                    refine_raw_btn = gr.Button("🔄 依【編輯後原文】重新翻譯潤飾", variant="secondary")
-                    refine_translated_btn = gr.Button("✨ 依【編輯後譯文】重新潤飾", variant="secondary")
+                    with gr.Column(scale=1):
+                        gr.Markdown("#### ➕ 建檔新語者")
+                        sp_name = gr.Textbox(label="姓名 / 代號", placeholder="例：張三 或 目標A")
+                        sp_note = gr.Textbox(label="備註（單位/番號等，可空）", placeholder="可留空")
+                        sp_files = gr.File(
+                            label="🎤 語音樣本（可多段，建議每段 ≥ 3 秒乾淨語音）",
+                            file_count="multiple",
+                            type="filepath",
+                            file_types=["audio"],
+                        )
+                        sp_enroll_btn = gr.Button("➕ 建檔聲紋", variant="primary")
+                        sp_status = gr.Textbox(label="操作結果", interactive=False, lines=2)
 
-                save_btn = gr.Button("💾 另存新檔", variant="primary")
-                save_file = gr.File(
-                    label="📁 點擊下方檔案連結即可選擇儲存位置",
-                    interactive=False,
+                        gr.Markdown("#### 🗑️ 刪除語者")
+                        with gr.Row():
+                            sp_del_id = gr.Number(label="語者 ID", precision=0, value=None)
+                            sp_del_btn = gr.Button("🗑️ 刪除", variant="stop")
+
+                    with gr.Column(scale=2):
+                        gr.Markdown("#### 📋 已建檔語者")
+                        with gr.Row():
+                            sp_search = gr.Textbox(
+                                label="🔍 關鍵字搜尋（姓名/代號）",
+                                placeholder="輸入後按搜尋",
+                                scale=3,
+                            )
+                            sp_search_btn = gr.Button("🔍 搜尋", scale=1)
+                            sp_refresh_btn = gr.Button("🔄 重新整理", scale=1)
+                        sp_list = gr.Dataframe(
+                            headers=SPEAKER_LIST_HEADERS,
+                            datatype=["number", "str", "number", "str", "str", "str"],
+                            interactive=False,
+                            wrap=True,
+                            row_count=(1, "dynamic"),
+                        )
+                        with gr.Row():
+                            sp_prev_btn = gr.Button("⬅️ 上一頁")
+                            sp_pageinfo = gr.Textbox(
+                                label="", interactive=False, lines=1, scale=3
+                            )
+                            sp_next_btn = gr.Button("下一頁 ➡️")
+
+                # ── 事件綁定（全部只動 speaker 區塊，不影響 Tab 1）──
+                sp_enroll_btn.click(
+                    fn=fn_speaker_enroll,
+                    inputs=[sp_name, sp_note, sp_files, sp_page, sp_search],
+                    outputs=[sp_status, sp_list, sp_pageinfo, sp_page],
                 )
-
-        transcribe_btn.click(
-            fn=fn_transcribe,
-            inputs=[audio_input, dialect, enable_diarize],
-            outputs=[info_box, raw_text_display, raw_text_box, translated_box, confidence_box],
-        )
-        refine_raw_btn.click(
-            fn=fn_refine,
-            inputs=[raw_text_display, raw_text_box, dialect],
-            outputs=[translated_box],
-        )
-        refine_translated_btn.click(
-            fn=fn_refine,
-            inputs=[raw_text_display, translated_box, dialect],
-            outputs=[translated_box],
-        )
-        save_btn.click(
-            fn=fn_save_as,
-            inputs=[translated_box, audio_input],
-            outputs=[save_file],
-        )
-
-        gr.Markdown(
-            """
-            ---
-            **v4.6 新功能：**
-            - **22 種中文方言**：含福州話、客家話、湘贛晉、潮汕、海南、蘇杭吳語細分等
-            - **字級時間戳**：每段顯示 `[A方 00:01-00:05] 內容`
-            - **逐段語言識別**：混合語音每段獨立判斷
-            - **5 人說話人分離**：A方 / B方 / C方 / D方 / E方
-            - **語言分布統計**：左上顯示音檔內各語言比例
-
-            **語音情報引擎：**
-            - 漢語方言（22 種） + 藏維 → **雅言 YaYan 自主研發方言語音模型**
-            - 日韓 + 歐洲 + 中東 + 東南亞 → **雅言 YaYan 自主研發全球語音模型**
-            """
-        )
+                sp_del_btn.click(
+                    fn=fn_speaker_delete,
+                    inputs=[sp_del_id, sp_page, sp_search],
+                    outputs=[sp_status, sp_list, sp_pageinfo, sp_page],
+                )
+                sp_search_btn.click(
+                    fn=fn_speaker_search,
+                    inputs=[sp_search],
+                    outputs=[sp_list, sp_pageinfo, sp_page],
+                )
+                sp_refresh_btn.click(
+                    fn=fn_speaker_search,
+                    inputs=[sp_search],
+                    outputs=[sp_list, sp_pageinfo, sp_page],
+                )
+                sp_prev_btn.click(
+                    fn=lambda pg, kw: fn_speaker_page(-1, pg, kw),
+                    inputs=[sp_page, sp_search],
+                    outputs=[sp_list, sp_pageinfo, sp_page],
+                )
+                sp_next_btn.click(
+                    fn=lambda pg, kw: fn_speaker_page(1, pg, kw),
+                    inputs=[sp_page, sp_search],
+                    outputs=[sp_list, sp_pageinfo, sp_page],
+                )
+                # 開啟頁面時自動載入第一頁
+                demo.load(
+                    fn=lambda: _render_speaker_list(1, ""),
+                    outputs=[sp_list, sp_pageinfo, sp_page],
+                )
     return demo
 
 
@@ -375,6 +586,13 @@ def main():
         warmup()
     except Exception as e:
         print(f"⚠️ Warmup 失敗（仍可啟動）：{e}")
+
+    # V5.0 M2：聲紋資料庫初始化（建表 IF NOT EXISTS；失敗不影響轉錄功能）
+    try:
+        speaker_db.init_db()
+        print(f"✅ 聲紋資料庫就緒（目前 {speaker_db.count_speakers()} 位語者）")
+    except Exception as e:
+        print(f"⚠️ 聲紋資料庫初始化失敗（語者管理分頁不可用，轉錄不受影響）：{e}")
 
     demo = build_ui()
     demo.queue(default_concurrency_limit=2).launch(

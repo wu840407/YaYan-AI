@@ -106,6 +106,43 @@ def _load_pipeline():
     return _PIPELINE
 
 
+# V5.0 M2：暴露 wespeaker embedding 物件給聲紋抽取用（複用，不重載、不額外吃 VRAM）
+_EMBED_MODEL = None
+
+
+def get_embedding_model():
+    """回傳 wespeaker embedding inference 物件。
+
+    優先複用已載入的 diarization pipeline 內部 embedding（零額外 VRAM）；
+    取不到時退回 standalone 載入同一份本地權重（26MB，VRAM 可忽略）。
+    """
+    global _EMBED_MODEL
+    if _EMBED_MODEL is not None:
+        return _EMBED_MODEL
+
+    # 1) 複用已載入 pipeline 的內部 embedding 物件
+    if _PIPELINE is not None:
+        inner = getattr(_PIPELINE, "_embedding", None)
+        if inner is not None and callable(inner):
+            _EMBED_MODEL = inner
+            logger.info("聲紋抽取：複用 diarization pipeline 內部 embedding 物件")
+            return _EMBED_MODEL
+
+    # 2) 退路：standalone 載入同一份本地權重
+    from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
+    import torch
+
+    embed_dir = model_path("YaYan_Diarize_Embed")
+    ckpt = _find_weight_file(embed_dir, ("pytorch_model.bin", "model.safetensors"))
+    try:
+        device = torch.device(CONFIG["devices"]["asr_gpu"])
+    except Exception:
+        device = torch.device("cpu")
+    _EMBED_MODEL = PretrainedSpeakerEmbedding(str(ckpt), device=device)
+    logger.info(f"聲紋抽取：standalone 載入 embedding 權重 {ckpt} → {device}")
+    return _EMBED_MODEL
+
+
 def diarize(audio: np.ndarray, sample_rate: int = 16000
             ) -> List[Tuple[float, float, str]]:
     """回傳 [(start_sec, end_sec, speaker_label), ...]。"""

@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import librosa
@@ -110,6 +111,87 @@ def _label_speaker_at(
         if s <= t <= e:
             return mapping.get(label, "A")
     return "A"
+
+
+def _fmt_speaker_prefix(speaker: str, t1: str, t2: str) -> str:
+    """A~E 匿名標籤加「方」（[A方 ...]）；已識別姓名/疑似不加（[張三 ...]）。"""
+    if speaker in SPEAKER_LABELS:
+        return f"[{speaker}方 {t1}-{t2}]"
+    return f"[{speaker} {t1}-{t2}]"
+
+
+def _identify_speakers(
+    audio: np.ndarray,
+    sample_rate: int,
+    raw_speakers: List[Tuple[float, float, str]],
+    fallback_mapping: Dict[str, str],
+) -> Dict[str, str]:
+    """V5.0 M2：對每個 diarization 原始 speaker 抽聲紋比對，回傳 raw_label → 顯示名稱。
+
+    - similarity ≥ threshold_high → 姓名（高信心）
+    - threshold_mid ≤ similarity < high → 「疑似_姓名(分數)」（中信心）
+    - 以下或無候選 → 退回 A/B/C（fallback_mapping），可選自動建「未知語者_時間戳」待命名
+
+    任一步失敗都退回該 label 的 A/B/C，絕不讓識別拖垮轉錄。
+    """
+    from . import speaker_db, voiceprint
+
+    cfg = CONFIG["speaker_id"]
+    th_high = float(cfg.get("threshold_high", 0.70))
+    th_mid = float(cfg.get("threshold_mid", 0.55))
+    top_k = int(cfg.get("top_k", 5))
+    ef = int(cfg.get("hnsw_ef_search", 100))
+    enroll_unknown = bool(cfg.get("enroll_unknown", True))
+
+    # 聚合每個 raw_label 的所有區段
+    segs_by_label: Dict[str, List[Tuple[float, float]]] = {}
+    for s, e, label in raw_speakers:
+        segs_by_label.setdefault(label, []).append((s, e))
+
+    mapping: Dict[str, str] = {}
+    for label, segs in segs_by_label.items():
+        fallback = fallback_mapping.get(label, "A")
+        try:
+            vec = voiceprint.extract_from_segments(audio, segs, sample_rate=sample_rate)
+        except Exception as e:
+            logger.debug(f"語者 {label} 抽聲紋失敗: {e}")
+            vec = None
+        if vec is None:
+            mapping[label] = fallback
+            continue
+
+        try:
+            hits = speaker_db.search(vec, top_k=top_k, ef_search=ef)
+        except Exception as e:
+            logger.warning(f"聲紋搜尋失敗，退回 {fallback}: {e}")
+            mapping[label] = fallback
+            continue
+
+        best = hits[0] if hits else None
+        if best and best["similarity"] >= th_high:
+            mapping[label] = best["name"]
+            logger.info(
+                f"語者 {label} → {best['name']}（sim={best['similarity']:.2f} 高信心）"
+            )
+        elif best and best["similarity"] >= th_mid:
+            mapping[label] = f"疑似_{best['name']}({best['similarity']:.2f})"
+            logger.info(
+                f"語者 {label} → 疑似_{best['name']}（sim={best['similarity']:.2f} 中信心）"
+            )
+        else:
+            mapping[label] = fallback
+            sim_txt = f"{best['similarity']:.2f}" if best else "無候選"
+            logger.info(f"語者 {label} → 辨識不出（best={sim_txt}），退回 {fallback}")
+            if enroll_unknown:
+                try:
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    speaker_db.add_speaker(
+                        f"未知語者_{ts}_{label}", vec,
+                        note="自動建檔待命名", source="auto",
+                    )
+                except Exception as e:
+                    logger.debug(f"未知語者自動建檔失敗: {e}")
+    return mapping
 
 
 def _fmt_time(sec: float) -> str:
@@ -270,6 +352,19 @@ def transcribe_audio(
         except Exception as e:
             logger.warning(f"Diarization 失敗，略過: {e}")
 
+    # V5.0 M2：聲紋語者識別（diarization 之後加掛；enable_speaker_id 預設 false
+    #          → 不進這個分支，speaker_mapping 維持 A/B/C，行為與 v4.7 完全相同）
+    if use_diarize and raw_speakers and CONFIG["speaker_id"]["enable_speaker_id"]:
+        try:
+            speaker_mapping = _identify_speakers(
+                audio, sr, raw_speakers, speaker_mapping
+            )
+            logger.info(
+                f"聲紋識別 → {', '.join(sorted(set(speaker_mapping.values())))}"
+            )
+        except Exception as e:
+            logger.warning(f"聲紋識別失敗，退回 A/B/C: {e}")
+
     from . import lid as _lid_mod
     enable_lid = asr_cfg["enable_lid"]
     seg_routings: List[Tuple[str, float, str]] = []
@@ -392,7 +487,7 @@ def transcribe_audio(
         t1 = _fmt_time(s.start)
         t2 = _fmt_time(s.end)
         if use_diarize:
-            prefix = f"[{s.speaker}方 {t1}-{t2}]"
+            prefix = _fmt_speaker_prefix(s.speaker, t1, t2)
         else:
             prefix = f"[{t1}-{t2}]"
         raw_text_lines.append(f"{prefix} {s.raw_text}")
