@@ -1,6 +1,6 @@
-# 🏺 YaYan-AI v4.6
+# 🏺 YaYan-AI v5.0
 
-> **多方言語音情報系統** — 內網離線部署的 22 中文方言語音轉文字 + 翻譯平台
+> **多方言語音情報系統** — 內網離線部署的 22 中文方言語音轉文字 + 翻譯平台 + 聲紋語者識別
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3100/)
@@ -14,6 +14,7 @@
 - **40+ 全球語言翻譯** — 日韓、歐美、中東、東南亞語言識別後統一翻譯為台灣正體中文
 - **字級時間戳** — 輸出格式 `[A方 00:01-00:05] 你好`，可精確定位錄音時間點
 - **5 人說話人分離** — A方 / B方 / C方 / D方 / E方
+- **聲紋語者識別（v5.0 新增）** — 建檔聲紋後可在轉錄中辨識特定人，輸出 `[張三 00:01-00:05]`；附「語者管理」分頁，預設關閉時維持匿名 A/B/C 不變
 - **逐段語言識別** — 混合語音場景每段獨立 LID 判斷，不會「整段被一種語言主導」
 - **完全離線運行** — 軍政府網域可用，所有模型本地化部署
 - **可編輯回饋循環** — 使用者修改 ASR 原文或譯文後，LLM 重新潤飾
@@ -24,7 +25,7 @@
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│ 🏺 YaYan-AI v4.6                                                   │
+│ 🏺 YaYan-AI v5.0                                                   │
 │ Edition: RTX6000-Server | ASR: Dolphin-CN-Dialect / Whisper-v3     │
 │                          LLM: Qwen3-14B + NF4                      │
 ├──────────────────────────────┬─────────────────────────────────────┤
@@ -294,17 +295,51 @@ sudo journalctl -u yayan -f
 
 ---
 
+## 🆚 各版本比較
+
+| 功能 | v4.6 | v4.7 | **v5.0** |
+|---|:---:|:---:|:---:|
+| 22 種中文方言 ASR | ✅ | ✅ | ✅ |
+| 40+ 全球語言翻譯 | ✅ | ✅ | ✅ |
+| 字級時間戳 | ✅ | ✅ | ✅ |
+| 5 人說話人分離 | ✅ | ✅ | ✅ |
+| 逐段語言識別（LID） | 基本 | 滑動窗口 context | 滑動窗口 context |
+| LID Ensemble（多模型投票） | ✗ | ✅（可選） | ✅（可選） |
+| 台語專用 ASR | ✗ | ✅ | ✅ |
+| UI 模型統一命名（雅言） | ✗ | ✗ | ✅ **M1** |
+| 聲紋語者識別 + 語者管理分頁 | ✗ | ✗ | ✅ **M2** |
+| 特殊字詞 RAG（術語/校正庫） | ✗ | ✗ | 🚧 規劃 **M3** |
+| LLM 升級（27B GGUF / llama.cpp） | ✗ | ✗ | 🚧 規劃 **M4** |
+
+### 🆕 v5.0 新增事項
+
+- **M1 — UI 模型統一命名**：前端一律顯示「雅言 YaYan 自主研發模型」，不暴露上游模型名稱。
+- **M2 — 聲紋語者識別 + 語者管理分頁**：
+  - 以 wespeaker embedding 抽 **256 維聲紋向量**，存入 **PostgreSQL + pgvector**（HNSW + cosine 相似度搜尋，設計上看 2 萬筆規模）。
+  - Web UI 新增「**語者管理**」分頁：上傳語音樣本建檔、命名、分頁列表、關鍵字搜尋、刪除、顯示每人樣本數。
+  - 轉錄後對每位說話人比對聲紋，依信心分級標記：高信心 → `[張三 …]`、中信心 → `[疑似_張三(0.65) …]`、辨識不出 → 退回 `[A方 …]`。
+  - config 開關 `enable_speaker_id` **預設 false**，不影響既有匿名 A/B/C 行為。
+  - 因大規模聲紋準確度有物理上限，定位為「**候選提示 + 人工確認**」，非自動點名。
+
+---
+
 ## 🗺️ Roadmap
 
-### v4.7（規劃中）
+### v4.7 ✅ 已完成
 
-- [ ] LID 升級到 Whisper-large-v3 detect_language API + VoxLingua107 ensemble
-- [ ] 滑動窗口 LID（前後 1.5 秒 context）
-- [ ] 閩南語專用模型（`luigisaetta/whisper-medium-zh-tw`）
+- [x] LID 升級 Whisper-large-v3 + VoxLingua107 ensemble（多模型投票）
+- [x] 滑動窗口 LID（前後 1.5 秒 context）
+- [x] 台語專用 ASR（BreezeASR-Taigi）
 
-### v5.0（未來）
+### v5.0 🚧 進行中
 
-- [ ] LLM 升級到 Qwen3.6-27B GGUF + llama-cpp-python backend
+- [x] **M1** — UI 模型統一命名（雅言 YaYan 自研模型）
+- [x] **M2** — 聲紋語者識別 + 語者管理分頁
+- [ ] **M3** — 特殊字詞 RAG（部隊番號/人名/地名/校正對照，翻譯時檢索比對）
+- [ ] **M4** — LLM 升級 Qwen3.6-27B GGUF + llama.cpp backend
+
+### 更遠期
+
 - [ ] Docker 容器化部署
 - [ ] 多機分散式（ASR 機器 + LLM 機器分離）
 - [ ] Web API（REST/gRPC）給其他應用呼叫
