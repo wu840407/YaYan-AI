@@ -47,7 +47,7 @@ models:
     license: Apache-2.0
     size_gb: 3.0
     note: "v4.7-C 台語(閩南語/Taigi)專用 ASR。Breeze-ASR-26：whisper-large-v2 微調
-           ~1萬小時台語，輸出漢字，Apache-2.0(軍政府部署可用)。預設停用
+           ~1萬小時台語，輸出漢字，Apache-2.0(離線部署可用)。預設停用
            (enable_taigi_asr)，離線環境需手動將權重放入 local_dir，缺失自動退回 Dolphin。
            註：CLAUDE.md 原寫 luigisaetta/whisper-medium-zh-tw 該 repo 不存在且 zh-tw 為
            台灣國語非台語，已更正。備選 NUTN-KWS/Whisper-Taiwanese-model-v0.5 為 CC-BY-NC，
