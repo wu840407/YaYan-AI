@@ -291,8 +291,22 @@ def _batched_translate(
         chunk_lines = text_lines[start:end]
         chunk_text = "\n".join(chunk_lines)
 
+        # V5.0 M3：RAG 術語庫（開關預設關）。只注入「本批文字實際命中」的術語，
+        # 空命中時 glossary_block="" → prompt 與既有逐字相同。檢索失敗不影響翻譯。
+        glossary_block = ""
+        if CONFIG.get("rag", {}).get("enable_rag", False):
+            try:
+                from . import glossary
+                glossary_block = glossary.glossary_for_text(chunk_text, source_language)
+                if glossary_block:
+                    logger.info(f"  批 {batch_idx + 1}: 注入術語區塊（{glossary_block.count(chr(10)) - 1} 條）")
+            except Exception as e:
+                logger.warning(f"  批 {batch_idx + 1}: 術語檢索失敗，跳過注入：{e}")
+
         try:
-            result = llm.translate(chunk_text, source_language=source_language)
+            result = llm.translate(
+                chunk_text, source_language=source_language, glossary_block=glossary_block
+            )
             translated_chunks.append(result.strip())
             logger.info(
                 f"  批 {batch_idx + 1}/{n_batches}: "

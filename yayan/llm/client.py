@@ -269,8 +269,13 @@ class LlmClient:
     # High-level helpers
     # ------------------------------------------------------------------ #
 
-    def translate(self, raw_text: str, source_language: str) -> str:
-        prompt = load_prompt("translate").replace("{source_language}", source_language)
+    def translate(self, raw_text: str, source_language: str, glossary_block: str = "") -> str:
+        # glossary_block 預設空字串 → {glossary} 被替換為 ""，prompt 與既有逐字相同
+        prompt = (
+            load_prompt("translate")
+            .replace("{glossary}", glossary_block or "")
+            .replace("{source_language}", source_language)
+        )
         return self.chat([
             {"role": "system", "content": prompt},
             {"role": "user", "content": raw_text},

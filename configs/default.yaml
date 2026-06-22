@@ -118,6 +118,21 @@ speaker_id:
   hnsw_ef_search: 100              # HNSW 查詢 ef_search（越大越準越慢）
   enroll_unknown: true             # 辨識不出時自動建「未知語者_時間戳」待命名
 
+# V5.0 M3：特殊字詞 RAG 術語庫（只在 prompt 層注入，不碰 LLM 後端）
+rag:
+  enable_rag: false                # ★ 預設 false：不檢索、不注入，翻譯 prompt 與既有逐字相同
+  max_inject_terms: 20             # 每批最多注入幾條術語（避免稀釋 LLM 注意力）
+  enable_fuzzy: true               # 是否做模糊比對（difflib，無需 DB extension）
+  fuzzy_threshold: 0.86            # 模糊命中相似度門檻（0~1，越高越嚴）
+  fuzzy_min_len: 2                 # 術語正規化長度 < 此值不做模糊（避免單字亂配）
+  db:                              # 沿用 M2 的 yayan_voiceprint DB，新增 glossary_terms 表
+    host: localhost
+    port: 5432
+    dbname: yayan_voiceprint
+    user: yayan
+    password_env: YAYAN_VP_DB_PASSWORD
+    password_default: ""
+
 # V5.0 M5：多聲道分離工具（純獨立工具，不碰任何模型/推論邏輯）
 tools:
   enable_channel_split: false      # ★ 預設 false：不顯示「聲道分離」分頁，行為與既有版本相同

@@ -39,6 +39,8 @@ from yayan.pipeline import (
 from yayan import speaker_db, voiceprint
 # V5.0 M5：多聲道分離（純獨立工具，不依賴任何模型）
 from yayan import channel_split
+# V5.0 M3：特殊字詞 RAG 術語庫（DB 存取模組；翻譯注入在 pipeline 內）
+from yayan import glossary
 
 
 # ★ v4.6: 22 中文方言全部展開
@@ -197,8 +199,9 @@ def _format_lang_breakdown(breakdown: dict) -> str:
 
 
 def fn_transcribe(audio_path, dialect_label, enable_diarize):
+    # 末位回傳值為「原始譯文」存入隱藏 State，供 M3 校正學習 diff 用（rag 關閉時不使用）
     if audio_path is None:
-        return "請先上傳或錄製音檔。", "", "", "", "—"
+        return "請先上傳或錄製音檔。", "", "", "", "—", ""
 
     routing = DIALECT_TO_ROUTING.get(dialect_label, "auto")
     try:
@@ -209,7 +212,7 @@ def fn_transcribe(audio_path, dialect_label, enable_diarize):
         )
     except Exception as e:
         logging.exception("transcribe 失敗")
-        return f"識別失敗：{e}", "", "", "", "—"
+        return f"識別失敗：{e}", "", "", "", "—", ""
 
     breakdown_text = _format_lang_breakdown(result.language_breakdown)
     n_speakers = len(set(s.speaker for s in result.segments)) if result.segments else 0
@@ -219,7 +222,10 @@ def fn_transcribe(audio_path, dialect_label, enable_diarize):
     )
     confidence, note = _calc_confidence(result)
     score_text = f"{confidence:.1f} / 100\n{note}"
-    return info, result.raw_text, result.raw_text, result.translated_text, score_text
+    return (
+        info, result.raw_text, result.raw_text, result.translated_text,
+        score_text, result.translated_text,
+    )
 
 
 def fn_refine(raw_text_original, edited_text, dialect_label):
@@ -408,6 +414,148 @@ def fn_split_channels(audio_path):
     return status, files, rows
 
 
+# ─────────────────────── V5.0 M3：術語庫 RAG 分頁 callbacks ───────────────────────
+# 這些函式只操作 glossary（DB + 記憶體快取），完全不碰轉錄/聲紋/LLM。
+GLOSSARY_LIST_HEADERS = ["ID", "術語", "類型", "正確譯法", "備註", "語言", "命中"]
+GLOSSARY_PAGE_SIZE = 20
+# UI 顯示標籤 → DB 類型鍵
+GLOSSARY_TYPE_CHOICES = {
+    "專有名詞": "proper_noun",
+    "同音錯字校正": "typo_fix",
+    "使用者校正": "correction",
+}
+
+
+def _render_glossary_list(page, keyword):
+    try:
+        page = max(1, int(page or 1))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        rows, total = glossary.list_terms(page, GLOSSARY_PAGE_SIZE, keyword or "")
+    except Exception as e:
+        logging.exception("術語列表讀取失敗")
+        return [], f"讀取失敗：{e}", page
+    max_page = max(1, (total + GLOSSARY_PAGE_SIZE - 1) // GLOSSARY_PAGE_SIZE)
+    page = min(page, max_page)
+    data = [
+        [
+            r["id"], r["term"],
+            glossary.TYPE_LABEL.get(r["term_type"], r["term_type"]),
+            r["correct"], r["note"], r["source_lang"], r["hit_count"],
+        ]
+        for r in rows
+    ]
+    info = f"第 {page} / {max_page} 頁　共 {total} 條術語"
+    return data, info, page
+
+
+def fn_glossary_add(term, correct, type_label, note, source_lang, page, keyword):
+    if not term or not term.strip() or not correct or not correct.strip():
+        data, info, page = _render_glossary_list(page, keyword)
+        return "⚠️ 術語與正確譯法皆不可為空。", data, info, page
+    ttype = GLOSSARY_TYPE_CHOICES.get(type_label, "proper_noun")
+    try:
+        tid = glossary.add_term(
+            term=term, correct=correct, term_type=ttype,
+            note=note or "", source_lang=(source_lang or "any").strip() or "any",
+        )
+    except Exception as e:
+        logging.exception("術語新增失敗")
+        data, info, page = _render_glossary_list(page, keyword)
+        return f"⚠️ 新增失敗：{e}", data, info, page
+    data, info, page = _render_glossary_list(page, keyword)
+    return f"✅ 已儲存術語 #{tid}「{term}」→「{correct}」。", data, info, page
+
+
+def fn_glossary_delete(term_id, page, keyword):
+    try:
+        tid = int(term_id)
+    except (TypeError, ValueError):
+        data, info, page = _render_glossary_list(page, keyword)
+        return "⚠️ 請輸入有效的術語 ID。", data, info, page
+    ok = glossary.delete_term(tid)
+    data, info, page = _render_glossary_list(page, keyword)
+    msg = f"🗑️ 已刪除術語 #{tid}。" if ok else f"⚠️ 找不到術語 #{tid}。"
+    return msg, data, info, page
+
+
+def fn_glossary_search(keyword):
+    return _render_glossary_list(1, keyword)
+
+
+def fn_glossary_page(delta, page, keyword):
+    try:
+        page = int(page)
+    except (TypeError, ValueError):
+        page = 1
+    return _render_glossary_list(max(1, page + delta), keyword)
+
+
+def fn_glossary_import(file_path, page, keyword):
+    import csv
+    if not file_path:
+        data, info, page = _render_glossary_list(page, keyword)
+        return "⚠️ 請先選擇 CSV/TSV 檔。", data, info, page
+    try:
+        with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
+            sample = f.read(4096)
+            f.seek(0)
+            delim = "\t" if sample.count("\t") > sample.count(",") else ","
+            reader = csv.reader(f, delimiter=delim)
+            rows = [r for r in reader if any((c or "").strip() for c in r)]
+    except Exception as e:
+        logging.exception("術語匯入讀檔失敗")
+        data, info, page = _render_glossary_list(page, keyword)
+        return f"⚠️ 讀檔失敗：{e}", data, info, page
+    # 若首列像表頭（含「術語/term」等字樣）則略過
+    if rows and any(h in (rows[0][0] or "").lower() for h in ("term", "術語", "詞")):
+        rows = rows[1:]
+    ok, skip, errs = glossary.bulk_import([tuple(r) for r in rows])
+    data, info, page = _render_glossary_list(1, keyword)
+    msg = f"✅ 匯入完成：成功 {ok} 筆，略過 {skip} 筆。"
+    if errs:
+        msg += f"　⚠️ {len(errs)} 筆錯誤（前 3）：" + "；".join(errs[:3])
+    return msg, data, info, page
+
+
+# ── 校正學習（半自動）：擷取候選 → 使用者勾選 → 入庫 ──
+def fn_extract_corrections(orig_translated, edited_translated):
+    """比對原譯與使用者改後譯文，列出候選詞對供勾選。"""
+    if not orig_translated or not edited_translated:
+        return gr.update(choices=[], value=[]), "（尚無可擷取的修正；請先轉錄並編輯譯文）"
+    try:
+        cands = glossary.extract_corrections(orig_translated, edited_translated)
+    except Exception as e:
+        logging.exception("校正候選擷取失敗")
+        return gr.update(choices=[], value=[]), f"⚠️ 擷取失敗：{e}"
+    if not cands:
+        return gr.update(choices=[], value=[]), "（未偵測到詞級修正；整句改寫不會被當作術語）"
+    choices = [f"{c['wrong']} → {c['correct']}" for c in cands]
+    return gr.update(choices=choices, value=choices), f"偵測到 {len(choices)} 條候選，請勾選要存入術語庫的項目。"
+
+
+def fn_save_corrections(selected):
+    if not selected:
+        return "⚠️ 未勾選任何候選。"
+    saved = 0
+    for item in selected:
+        if " → " not in item:
+            continue
+        wrong, correct = item.split(" → ", 1)
+        wrong, correct = wrong.strip(), correct.strip()
+        if not wrong or not correct:
+            continue
+        try:
+            glossary.add_term(
+                term=wrong, correct=correct, term_type="correction", source="learned"
+            )
+            saved += 1
+        except Exception:
+            logging.exception("校正入庫失敗：%s → %s", wrong, correct)
+    return f"✅ 已將 {saved} 條校正存入術語庫（可至「術語庫管理」分頁查看/重新整理）。"
+
+
 CSS = """
 .yayan-title { font-size: 1.5em; font-weight: 600; }
 .yayan-sub   { color: #888; font-size: 0.9em; }
@@ -422,6 +570,7 @@ CSS = """
 
 
 def build_ui() -> gr.Blocks:
+    rag_on = CONFIG.get("rag", {}).get("enable_rag", False)  # M3：術語庫總開關
     with gr.Blocks(title=f"YaYan-AI v{__version__}", css=CSS, theme=gr.themes.Soft()) as demo:
         gr.Markdown(
             f"""
@@ -463,6 +612,7 @@ def build_ui() -> gr.Blocks:
                     with gr.Column(scale=2):
                         gr.Markdown("### 📜 識別原文（可編輯，含時間戳）")
                         raw_text_display = gr.State("")
+                        orig_translated = gr.State("")   # M3：原始譯文（校正學習 diff 用）
                         raw_text_box = gr.Textbox(
                             label="ASR 原文",
                             lines=10,
@@ -482,6 +632,17 @@ def build_ui() -> gr.Blocks:
                             refine_raw_btn = gr.Button("🔄 依【編輯後原文】重新翻譯潤飾", variant="secondary")
                             refine_translated_btn = gr.Button("✨ 依【編輯後譯文】重新潤飾", variant="secondary")
 
+                        # ── M3 校正學習（半自動，rag 開啟時才出現）──
+                        if rag_on:
+                            with gr.Accordion("📖 把本次修正存進術語庫（校正學習）", open=False):
+                                corr_extract_btn = gr.Button("🔍 擷取本次修正候選", size="sm")
+                                corr_info = gr.Markdown("編輯上方譯文後，按此擷取詞級修正候選。")
+                                corr_choices = gr.CheckboxGroup(
+                                    label="候選詞對（勾選要存入的項目）", choices=[]
+                                )
+                                corr_save_btn = gr.Button("💾 存入勾選的校正", variant="primary", size="sm")
+                                corr_status = gr.Textbox(label="校正結果", interactive=False, lines=1)
+
                         save_btn = gr.Button("💾 另存新檔", variant="primary")
                         save_file = gr.File(
                             label="📁 點擊下方檔案連結即可選擇儲存位置",
@@ -491,7 +652,8 @@ def build_ui() -> gr.Blocks:
                 transcribe_btn.click(
                     fn=fn_transcribe,
                     inputs=[audio_input, dialect, enable_diarize],
-                    outputs=[info_box, raw_text_display, raw_text_box, translated_box, confidence_box],
+                    outputs=[info_box, raw_text_display, raw_text_box, translated_box,
+                             confidence_box, orig_translated],
                 )
                 refine_raw_btn.click(
                     fn=fn_refine,
@@ -508,6 +670,17 @@ def build_ui() -> gr.Blocks:
                     inputs=[translated_box, audio_input],
                     outputs=[save_file],
                 )
+                if rag_on:
+                    corr_extract_btn.click(
+                        fn=fn_extract_corrections,
+                        inputs=[orig_translated, translated_box],
+                        outputs=[corr_choices, corr_info],
+                    )
+                    corr_save_btn.click(
+                        fn=fn_save_corrections,
+                        inputs=[corr_choices],
+                        outputs=[corr_status],
+                    )
 
                 gr.Markdown(
                     """
@@ -659,6 +832,101 @@ def build_ui() -> gr.Blocks:
                     inputs=[ch_audio],
                     outputs=[ch_status, ch_files, ch_table],
                 )
+
+            # ───────── Tab 4：術語庫管理（V5.0 M3 新增，config 開關預設關）─────────
+            if rag_on:
+                with gr.Tab("📖 術語庫管理"):
+                    gr.Markdown(
+                        "### 📖 特殊字詞術語庫　"
+                        "<span class='yayan-sub'>專名統一譯法、同音錯字校正、使用者校正；"
+                        "翻譯時自動檢索比對並注入</span>"
+                    )
+                    gl_page = gr.State(1)
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            gr.Markdown("#### ➕ 新增 / 更新術語")
+                            gl_term = gr.Textbox(label="術語（來源詞/錯字/原文）", placeholder="例：產稅")
+                            gl_correct = gr.Textbox(label="正確譯法 / 正確詞", placeholder="例：殘缺")
+                            gl_type = gr.Dropdown(
+                                label="類型",
+                                choices=list(GLOSSARY_TYPE_CHOICES.keys()),
+                                value="專有名詞",
+                            )
+                            gl_note = gr.Textbox(label="備註（番號/單位/來源，可空）", placeholder="可留空")
+                            gl_lang = gr.Textbox(label="適用來源語言", value="any", placeholder="any 或 zh/yue …")
+                            gl_add_btn = gr.Button("➕ 儲存術語", variant="primary")
+                            gl_status = gr.Textbox(label="操作結果", interactive=False, lines=2)
+
+                            gr.Markdown("#### 🗑️ 刪除術語")
+                            with gr.Row():
+                                gl_del_id = gr.Number(label="術語 ID", precision=0, value=None)
+                                gl_del_btn = gr.Button("🗑️ 刪除", variant="stop")
+
+                            gr.Markdown("#### 📥 批次匯入（CSV/TSV）")
+                            gr.Markdown(
+                                "<span class='yayan-sub'>欄位順序：術語, 正確譯法, 類型"
+                                "(proper_noun/typo_fix/correction), 備註, 語言（後三欄可省）</span>"
+                            )
+                            gl_import_file = gr.File(label="選擇 CSV/TSV", type="filepath")
+                            gl_import_btn = gr.Button("📥 匯入")
+
+                        with gr.Column(scale=2):
+                            gr.Markdown("#### 📋 術語清單")
+                            with gr.Row():
+                                gl_search = gr.Textbox(
+                                    label="🔍 關鍵字（術語/譯法/備註）",
+                                    placeholder="輸入後按搜尋", scale=3,
+                                )
+                                gl_search_btn = gr.Button("🔍 搜尋", scale=1)
+                                gl_refresh_btn = gr.Button("🔄 重新整理", scale=1)
+                            gl_list = gr.Dataframe(
+                                headers=GLOSSARY_LIST_HEADERS,
+                                datatype=["number", "str", "str", "str", "str", "str", "number"],
+                                interactive=False, wrap=True, row_count=(1, "dynamic"),
+                            )
+                            with gr.Row():
+                                gl_prev_btn = gr.Button("⬅️ 上一頁")
+                                gl_pageinfo = gr.Textbox(label="", interactive=False, lines=1, scale=3)
+                                gl_next_btn = gr.Button("下一頁 ➡️")
+
+                    # ── 事件綁定（只動術語區塊）──
+                    gl_add_btn.click(
+                        fn=fn_glossary_add,
+                        inputs=[gl_term, gl_correct, gl_type, gl_note, gl_lang, gl_page, gl_search],
+                        outputs=[gl_status, gl_list, gl_pageinfo, gl_page],
+                    )
+                    gl_del_btn.click(
+                        fn=fn_glossary_delete,
+                        inputs=[gl_del_id, gl_page, gl_search],
+                        outputs=[gl_status, gl_list, gl_pageinfo, gl_page],
+                    )
+                    gl_import_btn.click(
+                        fn=fn_glossary_import,
+                        inputs=[gl_import_file, gl_page, gl_search],
+                        outputs=[gl_status, gl_list, gl_pageinfo, gl_page],
+                    )
+                    gl_search_btn.click(
+                        fn=fn_glossary_search, inputs=[gl_search],
+                        outputs=[gl_list, gl_pageinfo, gl_page],
+                    )
+                    gl_refresh_btn.click(
+                        fn=fn_glossary_search, inputs=[gl_search],
+                        outputs=[gl_list, gl_pageinfo, gl_page],
+                    )
+                    gl_prev_btn.click(
+                        fn=lambda pg, kw: fn_glossary_page(-1, pg, kw),
+                        inputs=[gl_page, gl_search],
+                        outputs=[gl_list, gl_pageinfo, gl_page],
+                    )
+                    gl_next_btn.click(
+                        fn=lambda pg, kw: fn_glossary_page(1, pg, kw),
+                        inputs=[gl_page, gl_search],
+                        outputs=[gl_list, gl_pageinfo, gl_page],
+                    )
+                    demo.load(
+                        fn=lambda: _render_glossary_list(1, ""),
+                        outputs=[gl_list, gl_pageinfo, gl_page],
+                    )
     return demo
 
 
@@ -684,6 +952,14 @@ def main():
         print(f"✅ 聲紋資料庫就緒（目前 {speaker_db.count_speakers()} 位語者）")
     except Exception as e:
         print(f"⚠️ 聲紋資料庫初始化失敗（語者管理分頁不可用，轉錄不受影響）：{e}")
+
+    # V5.0 M3：術語庫初始化（僅在 enable_rag 時；失敗不影響轉錄/翻譯）
+    if CONFIG.get("rag", {}).get("enable_rag", False):
+        try:
+            glossary.init_db()
+            print(f"✅ 術語庫就緒（目前 {glossary.count_terms()} 條術語）")
+        except Exception as e:
+            print(f"⚠️ 術語庫初始化失敗（術語庫分頁不可用，翻譯不受影響）：{e}")
 
     demo = build_ui()
     demo.queue(default_concurrency_limit=2).launch(
