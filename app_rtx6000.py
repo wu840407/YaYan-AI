@@ -37,6 +37,8 @@ from yayan.pipeline import (
 )
 # V5.0 M2：聲紋語者識別（底層模組；UI「語者管理」分頁用）
 from yayan import speaker_db, voiceprint
+# V5.0 M5：多聲道分離（純獨立工具，不依賴任何模型）
+from yayan import channel_split
 
 
 # ★ v4.6: 22 中文方言全部展開
@@ -364,6 +366,48 @@ def fn_speaker_page(delta, page, keyword):
     return _render_speaker_list(max(1, page + delta), keyword)
 
 
+# ─────────────────────── V5.0 M5：聲道分離分頁 callbacks ───────────────────────
+# 這些函式只呼叫 channel_split（純獨立工具），完全不碰轉錄/聲紋/LLM 任何邏輯。
+CHANNEL_INFO_HEADERS = ["聲道", "取樣率(Hz)", "長度(秒)", "檔名", "路徑"]
+
+
+def fn_detect_channels(audio_path):
+    """上傳後偵測聲道數與基本資訊。"""
+    if not audio_path:
+        return "請先上傳音檔。", gr.update(interactive=False)
+    try:
+        info = channel_split.probe(audio_path)
+    except Exception as e:
+        logging.exception("聲道偵測失敗")
+        return f"⚠️ 偵測失敗：{e}", gr.update(interactive=False)
+    msg = (
+        f"🎚️ 聲道數：**{info['channels']}**　｜　取樣率：{info['samplerate']} Hz　｜　"
+        f"長度：{info['duration']:.1f} 秒　｜　格式：{info['format']}/{info['subtype']}"
+    )
+    if info["channels"] < 2:
+        msg += "\n\nℹ️ 此檔為單聲道，無需分離（仍可按下方按鈕輸出一份複本）。"
+    return msg, gr.update(interactive=True)
+
+
+def fn_split_channels(audio_path):
+    """執行分離，回傳下載檔清單與每聲道資訊表。"""
+    if not audio_path:
+        return "請先上傳音檔。", None, []
+    out_root = CONFIG["paths"]["output_dir"]
+    try:
+        out_dir, results = channel_split.split_channels(audio_path, out_root)
+    except Exception as e:
+        logging.exception("聲道分離失敗")
+        return f"⚠️ 分離失敗：{e}", None, []
+    files = [r["path"] for r in results]
+    rows = [
+        [r["channel"], r["samplerate"], r["duration"], Path(r["path"]).name, r["path"]]
+        for r in results
+    ]
+    status = f"✅ 已分離為 {len(results)} 個單聲道檔，存於：{out_dir}"
+    return status, files, rows
+
+
 CSS = """
 .yayan-title { font-size: 1.5em; font-weight: 600; }
 .yayan-sub   { color: #888; font-size: 0.9em; }
@@ -567,6 +611,53 @@ def build_ui() -> gr.Blocks:
                 demo.load(
                     fn=lambda: _render_speaker_list(1, ""),
                     outputs=[sp_list, sp_pageinfo, sp_page],
+                )
+
+            # ───────── Tab 3：聲道分離（V5.0 M5 新增，config 開關預設關）─────────
+            if CONFIG.get("tools", {}).get("enable_channel_split", False):
+              with gr.Tab("🎚️ 聲道分離"):
+                gr.Markdown(
+                    "### 🎚️ 多聲道分離　"
+                    "<span class='yayan-sub'>把多聲道（立體聲/多軌）音檔拆成多個單聲道 wav，"
+                    "供個別轉錄或處理</span>"
+                )
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        ch_audio = gr.Audio(
+                            label="🎵 上傳音檔",
+                            type="filepath",
+                        )
+                        ch_detect_info = gr.Markdown("上傳後將自動偵測聲道數。")
+                        ch_split_btn = gr.Button(
+                            "✂️ 分離聲道", variant="primary", interactive=False
+                        )
+                        ch_status = gr.Textbox(label="操作結果", interactive=False, lines=2)
+                    with gr.Column(scale=2):
+                        gr.Markdown("#### 📋 各聲道資訊")
+                        ch_table = gr.Dataframe(
+                            headers=CHANNEL_INFO_HEADERS,
+                            datatype=["number", "number", "number", "str", "str"],
+                            interactive=False,
+                            wrap=True,
+                            row_count=(1, "dynamic"),
+                        )
+                        gr.Markdown("#### ⬇️ 下載單聲道檔")
+                        ch_files = gr.File(
+                            label="分離結果（點擊下載）",
+                            file_count="multiple",
+                            interactive=False,
+                        )
+
+                # ── 事件綁定（全部只動聲道分離區塊，不影響其他 Tab）──
+                ch_audio.change(
+                    fn=fn_detect_channels,
+                    inputs=[ch_audio],
+                    outputs=[ch_detect_info, ch_split_btn],
+                )
+                ch_split_btn.click(
+                    fn=fn_split_channels,
+                    inputs=[ch_audio],
+                    outputs=[ch_status, ch_files, ch_table],
                 )
     return demo
 

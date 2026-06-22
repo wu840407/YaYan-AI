@@ -118,6 +118,10 @@ speaker_id:
   hnsw_ef_search: 100              # HNSW 查詢 ef_search（越大越準越慢）
   enroll_unknown: true             # 辨識不出時自動建「未知語者_時間戳」待命名
 
+# V5.0 M5：多聲道分離工具（純獨立工具，不碰任何模型/推論邏輯）
+tools:
+  enable_channel_split: false      # ★ 預設 false：不顯示「聲道分離」分頁，行為與既有版本相同
+
 postprocess:
   use_opencc: true
   opencc_config: s2twp.json
