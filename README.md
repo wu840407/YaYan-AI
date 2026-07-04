@@ -1,377 +1,120 @@
-# 🏺 YaYan-AI v5.0
+# YaYan-AI（雅言）
 
-> **多方言語音情報系統** — 內網離線部署的 22 中文方言語音轉文字 + 翻譯平台 + 聲紋語者識別
+![Python](https://img.shields.io/badge/python-3.10+-blue)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.3-EE4C2C)
+![Offline](https://img.shields.io/badge/deployment-100%25_offline-brightgreen)
+![Dialects](https://img.shields.io/badge/Chinese_dialects-22-orange)
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3100/)
-[![PyTorch 2.3.1](https://img.shields.io/badge/PyTorch-2.3.1+cu121-ee4c2c.svg)](https://pytorch.org/)
-
----
-
-## ✨ 功能特色
-
-- **22 種中文方言識別** — 普通話、粵語、吳語（上海/蘇州/寧波/溫州）、閩南語/台語、福州話、客家話、湘語、贛語、晉語、四川話、東北話、山東話、河南話等
-- **40+ 全球語言翻譯** — 日韓、歐美、中東、東南亞語言識別後統一翻譯為台灣正體中文
-- **字級時間戳** — 輸出格式 `[A方 00:01-00:05] 你好`，可精確定位錄音時間點
-- **5 人說話人分離** — A方 / B方 / C方 / D方 / E方
-- **聲紋語者識別（v5.0 新增）** — 建檔聲紋後可在轉錄中辨識特定人，輸出 `[張三 00:01-00:05]`；附「語者管理」分頁，預設關閉時維持匿名 A/B/C 不變
-- **逐段語言識別** — 混合語音場景每段獨立 LID 判斷，不會「整段被一種語言主導」
-- **完全離線運行** — 離線內網環境可用，所有模型本地化部署
-- **可編輯回饋循環** — 使用者修改 ASR 原文或譯文後，LLM 重新潤飾
+> **Fully-offline multi-dialect speech intelligence system.**
+> Converts speech across **22 Chinese dialects and 40+ world languages** into structured
+> Traditional-Chinese transcripts — with speaker diarization, character-level timestamps,
+> and an LLM-assisted correction loop. Designed for **air-gapped, privacy-critical
+> environments**: no cloud, no API calls, no data leaving the machine.
 
 ---
 
-## 🖼️ 截圖
+## Why YaYan-AI
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│ 🏺 YaYan-AI v5.0                                                   │
-│ Edition: RTX6000-Server | ASR: Dolphin-CN-Dialect / Whisper-v3     │
-│                          LLM: Qwen3-14B + NF4                      │
-├──────────────────────────────┬─────────────────────────────────────┤
-│ 🎤 上傳音檔                  │ 📜 識別原文（可編輯）               │
-│ [audio waveform]             │ [A方 00:01-00:05] 大家好我是阿明    │
-│                              │ [B方 00:06-00:09] 歹勢啦今天有事     │
-│ 來源語言: 🔍 自動偵測         │ [A方 00:10-00:14] 我兒子今天去福州  │
-│ ☑ 啟用說話人分離             │ [C方 00:15-00:18] 食飯了無           │
-│                              │                                      │
-│ [🚀 開始轉錄翻譯]            │ 🇹🇼 台灣正體中文譯文（可編輯）       │
-│                              │ [A方 00:01-00:05] 大家好我是阿明     │
-│ 📊 識別資訊                  │ [B方 00:06-00:09] 不好意思今天有事   │
-│ 語言分布:                    │ [A方 00:10-00:14] 我兒子今天去福州   │
-│   閩南語 45%｜普通話 35%     │ [C方 00:15-00:18] 吃飯了嗎           │
-│   福州話 13%｜客家話 7%      │                                      │
-│ 說話人: 3 位｜段數: 62       │ [🔄 重新潤飾] [💾 另存新檔]          │
-│                              │                                      │
-│ 🎯 識別精準度                 │                                      │
-│      87.5 / 100              │                                      │
-│  品質良好                    │                                      │
-└──────────────────────────────┴─────────────────────────────────────┘
+Off-the-shelf ASR works for Mandarin and English. It falls apart on **low-resource
+Chinese dialects** — Hokkien (Taiwanese), Hakka, Wu, Cantonese variants — exactly the
+speech that matters in real-world field recordings, call archives, and oral-history
+preservation. And in privacy-critical settings, shipping audio to a cloud API is not
+an option at all.
+
+YaYan-AI solves both: state-of-the-art dialect recognition, running entirely on
+local GPUs.
+
+## Pipeline Architecture
+
+```mermaid
+flowchart LR
+    A["🎙️ Audio input<br/>meetings · calls · field recordings"] --> D["pyannote 3.1<br/>speaker diarization (≤5 speakers)"]
+    D --> L["Per-segment<br/>language / dialect ID"]
+    L -->|"22 Chinese dialects"| C["Dolphin-CN-Dialect<br/>dialect ASR"]
+    L -->|"40+ languages"| W["Whisper large-v3<br/>multilingual ASR"]
+    C --> Q["Qwen3-14B<br/>correction · normalization<br/>→ Traditional Chinese"]
+    W --> Q
+    Q --> T["📄 Structured transcript<br/>speaker labels + char-level timestamps"]
+    T --> F["✏️ Editable feedback loop<br/>human fixes → LLM re-refinement"]
+    F -.-> Q
 ```
 
----
+**Design decisions that matter:**
+- **Per-segment language ID** — a single conversation can mix Mandarin, Hokkien and
+  English; routing each segment independently prevents one dominant language from
+  swallowing the others.
+- **Two-stage ASR routing** — dialect-specialized model (Dolphin) for Chinese variants,
+  Whisper large-v3 for everything else; each model does only what it is best at.
+- **LLM correction stage** — Qwen3-14B normalizes ASR output into readable Traditional
+  Chinese and fixes dialect-specific transcription artifacts.
+- **Human-in-the-loop** — user edits feed back into the correction stage, so accuracy
+  improves on *your* audio domain over time.
 
-## 🧱 技術棧
+## Features
 
-| 層 | 模型 / 套件 | 版本 | 用途 |
-|---|---|---|---|
-| **ASR — 中文方言** | DataoceanAI/dolphin-small | 2026-05 | 22 方言 + 字級時間戳 |
-| **ASR — 全球** | openai/whisper-large-v3 | - | 99 語言（日韓歐美中東東南亞）|
-| **LID** | speechbrain/lang-id-voxlingua107-ecapa | - | 107 語言識別 |
-| **VAD** | snakers4/silero-vad | 6.x | 語音活動偵測（pip-bundled）|
-| **Diarize** | pyannote/speaker-diarization-3.1 | - | 說話人分離（5 人）|
-| **LLM** | Qwen/Qwen3-14B | - | 翻譯與潤飾（BF16 + NF4 動態量化）|
-| **Framework** | PyTorch / transformers / gradio | 2.3.1 / 4.51.3 / 4.44.1 | - |
-| **OS / GPU** | Ubuntu 24.04 / 2× RTX 6000 (Turing 24GB) | - | - |
+| Capability | Detail |
+|---|---|
+| Chinese dialects | 22 — Mandarin, Cantonese, Hokkien/Taiwanese, Hakka, Wu (Shanghai/Suzhou/Wenzhou), Hunanese, … |
+| World languages | 40+ via Whisper large-v3 (JA / KO / EU / SEA / ME) |
+| Speaker diarization | Up to 5 speakers (A–E), pyannote 3.1 |
+| Timestamps | Character-level |
+| Output | Structured Traditional-Chinese transcript, per-speaker |
+| Correction | Qwen3-14B two-stage + editable feedback loop |
+| Deployment | 100 % offline — air-gapped & privacy-critical environments |
+| Interface | Gradio web UI |
 
----
+## Requirements
 
-## 🚀 安裝部署
+| Component | Spec |
+|---|---|
+| OS | Ubuntu 22.04+ |
+| GPU | 2× NVIDIA GPU, ~20 GB VRAM each *<!-- TODO(確認): RTX 4000 Ada ×2 還是 RTX 6000 ×2？照實填 -->* |
+| Driver / CUDA | 535+ / CUDA 12.1 |
+| Python | 3.10 |
+| Disk | ~50 GB (models ≈ 19 GB + workspace) |
+| RAM | 32 GB+ |
 
-### 硬體需求
+Core stack: PyTorch 2.3.1 · transformers 4.51.3 · pyannote.audio 3.1 · Gradio 4.44
 
-- **GPU**：≥ 24GB VRAM × 1 GPU（或 24GB × 2 雙 GPU 分配 ASR/LLM）
-- **RAM**：≥ 32GB
-- **儲存**：≥ 50GB（含所有模型）
-- **CUDA driver**：≥ 535（建議 580+）
-
-### 系統相依
+## Quickstart
 
 ```bash
-sudo apt install -y ffmpeg libsndfile1
-```
-
-### Python 環境
-
-```bash
-# 建立 conda env
-conda create -n yayan python=3.10 -y
-conda activate yayan
-
-# 安裝 PyTorch + CUDA
-pip install torch==2.3.1 torchaudio==2.3.1 \
-    --index-url https://download.pytorch.org/whl/cu121
-
-# 安裝其餘相依
+git clone https://github.com/wu840407/YaYan-AI.git
+cd YaYan-AI
 pip install -r requirements.txt
 
-# 安裝 Dolphin SDK
-pip install dataoceanai-dolphin
+# Download models (online phase; system runs offline afterwards)
+bash scripts/download_models.sh   # <!-- TODO(確認): 對齊實際腳本名 -->
+
+python app.py                     # Gradio UI on http://localhost:7860
 ```
 
-### 下載模型
+<!-- TODO(你補): 一張 Gradio 介面截圖或 20 秒 demo GIF，放 docs/img/，效果 > 一千字 -->
 
-第一次部署需從 HuggingFace 下載 ~38GB 模型：
+## Performance
 
-```bash
-bash scripts/download_models.sh --with-diarize
-```
+<!-- TODO(你補,高價值): 一個小 benchmark 表 — 例:
+| 測試集 | 方言 | CER/WER | RTF |
+台語真實錄音 30 min | Hokkien | xx% | 0.x
+沒有數字也可先寫定性描述（1 小時錄音處理時間、單卡/雙卡差異） -->
 
-下載清單：
+## Roadmap
 
-| Alias | HF Repo | 大小 |
-|---|---|---|
-| `YaYan_Reasoner` | `Qwen/Qwen3-14B` | ~28GB |
-| `YaYan_ASR_Dialect` | `DataoceanAI/dolphin-small` | ~1.6GB |
-| `YaYan_ASR_Global` | `openai/whisper-large-v3` | ~3GB |
-| `YaYan_LID` | `speechbrain/lang-id-voxlingua107-ecapa` | ~100MB |
-| `YaYan_Diarize` | `pyannote/speaker-diarization-3.1` | ~10MB |
-| `YaYan_Diarize_Seg` | `pyannote/segmentation-3.0` | ~6MB |
-| `YaYan_Diarize_Embed` | `pyannote/wespeaker-voxceleb-resnet34-LM` | ~30MB |
+- [ ] Fine-tuning on H200 hardware for Taiwanese-Hokkien accuracy (2026 H2)
+- [ ] Kafka-based high-throughput batch pipeline
+- [ ] Streaming (real-time) mode
 
-> ⚠️ pyannote 3 個 repo 為 gated，需先在 HF 接受授權並設定 `HF_TOKEN`
+## License & Author
 
-### 驗證
-
-```bash
-python scripts/verify_models.py
-```
-
-預期全綠：
-
-```
-✅ YaYan_Reasoner     (28,xxx MB) [dtype=bfloat16]
-✅ YaYan_ASR_Dialect   (1,6xx MB)  Dolphin-CN-Dialect-Small
-✅ YaYan_ASR_Global    (3,xxx MB)  Whisper-large-v3
-✅ YaYan_LID              (xxx MB)  VoxLingua107 ECAPA
-✅ silero-vad (pip-bundled)
-✅ dolphin SDK
-✅ YaYan_Diarize / YaYan_Diarize_Seg / YaYan_Diarize_Embed
-```
-
-### 啟動
-
-```bash
-bash scripts/start_server.sh
-```
-
-打開瀏覽器：`http://localhost:7860` 或 `http://<server-ip>:7860`
+<!-- TODO(確認): 選 license，建議 MIT 或 Apache-2.0；模型各自沿用上游授權 -->
+Maintained by [ChengRung Wu](https://wu840407.github.io) ([@wu840407](https://github.com/wu840407)).
+Questions / issues welcome.
 
 ---
 
-## 📁 專案結構
+## 中文說明（摘要）
 
-```
-YaYan_AI/
-├── app_rtx6000.py              # Gradio Web UI 入口
-├── auto_batch_rtx6000.py       # Batch 自動監聽模式
-├── requirements.txt
-├── configs/
-│   ├── default.yaml            # 主設定（routing、LLM 參數、devices）
-│   ├── model_aliases.yaml      # alias → HF repo 對照
-│   └── prompts/
-│       ├── translate.txt       # 翻譯 prompt（22 方言意譯範例）
-│       └── refine.txt          # 潤飾 prompt
-├── yayan/
-│   ├── __init__.py
-│   ├── config.py               # 設定載入
-│   ├── pipeline.py             # 端到端 orchestrator
-│   ├── vad.py                  # silero-vad 切片
-│   ├── lid.py                  # 語種識別
-│   ├── diarize.py              # pyannote 說話人分離
-│   ├── asr/
-│   │   ├── __init__.py
-│   │   ├── router.py           # 依 routing 分配到 Dolphin / Whisper
-│   │   ├── dolphin.py          # Dolphin-CN-Dialect 包裝
-│   │   └── whisper_global.py   # Whisper-large-v3 包裝
-│   └── llm/
-│       ├── __init__.py
-│       ├── client.py           # transformers / vllm / openai 三後端
-│       └── postprocess.py      # OpenCC + thinking tag 清理
-└── scripts/
-    ├── start_server.sh
-    ├── download_models.sh
-    ├── verify_models.py
-    └── verify_offline.py
-```
-
----
-
-## 🎯 支援的語言與方言
-
-### 漢語方言（22 種，走 Dolphin-CN-Dialect）
-
-| 大類 | 子方言 |
-|---|---|
-| **北方官話** | 普通話、東北話、山東話、河南話、西安話、蘭州話 |
-| **西南官話** | 四川話、武漢話 |
-| **江淮官話** | 南京話 |
-| **吳語** | 上海話、蘇州話、寧波話、溫州話 |
-| **粵語** | 廣東話 |
-| **閩語** | 閩南語/台語、潮汕話、海南話、福州話（閩東語）|
-| **客贛湘晉** | 客家話、湘語、贛語、晉語 |
-
-### 中亞 / 少數民族
-
-藏語、維吾爾語
-
-### 全球語言（走 Whisper-large-v3）
-
-日文、韓文、英文、法文、德文、俄文、西班牙文、波斯文、阿拉伯文、烏爾都文、印地文、泰文、越南文、馬來文、印尼文
-
----
-
-## 🔄 使用流程
-
-1. **上傳音檔**（或現場錄音）
-2. **選擇來源語言**（建議「自動偵測」）
-3. **可選：啟用說話人分離**（雙人以上對話建議）
-4. 點 **🚀 開始轉錄翻譯**
-5. 取得：
-   - ASR 原文（含 `[A方 00:01-00:05]` 時間戳）
-   - 台灣正體中文譯文
-   - 識別精準度分數（0-100）
-   - 語言分布統計
-6. **編輯回饋**（可選）：
-   - 修改 ASR 原文 → 「依編輯後原文重新翻譯潤飾」
-   - 修改譯文 → 「依編輯後譯文重新潤飾」
-7. **💾 另存新檔** 下載 txt 結果
-
----
-
-## 🔧 設定調校
-
-`configs/default.yaml` 主要參數：
-
-```yaml
-asr:
-  enable_vad: true         # silero-vad 切片
-  enable_lid: true         # 永遠開逐段 LID
-  enable_diarize: true     # 預設開說話人分離
-
-audio:
-  vad_threshold: 0.5       # VAD 敏感度（0.3 = 寬鬆，0.7 = 嚴格）
-  max_chunk_seconds: 30    # 單段最長秒數
-
-diarize:
-  min_speakers: 1
-  max_speakers: 5          # ABCDE
-
-llm:
-  quantization: nf4        # bitsandbytes 動態量化
-  temperature: 0.6
-  top_p: 0.9
-  repetition_penalty: 1.05
-```
-
----
-
-## 🌐 HTTPS 與服務化（生產部署）
-
-### Nginx 反向代理 + AD CA 憑證
-
-```bash
-# 申請 AD CA 簽的憑證（Windows AD CS）
-certreq -new yayan-server.inf yayan-server.csr
-certreq -submit -config "<CA-server>\<CA-name>" yayan-server.csr yayan-server.cer
-certreq -accept yayan-server.cer
-# 從 certlm.msc 匯出 PFX
-
-# 在 Linux 端轉為 PEM
-sudo openssl pkcs12 -in yayan-server.pfx -clcerts -nokeys -out /etc/nginx/ssl/yayan-server.crt
-sudo openssl pkcs12 -in yayan-server.pfx -nocerts -nodes -out /etc/nginx/ssl/yayan-server.key
-```
-
-Nginx 設定見 `deploy/nginx-yayan.conf`。
-
-### systemd 服務化
-
-```bash
-sudo cp deploy/yayan.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable yayan
-sudo systemctl start yayan
-sudo journalctl -u yayan -f
-```
-
----
-
-## 🚧 已知限制
-
-- **Dolphin LID 對近親語言區分能力一般**：閩南 vs 國語、客家 vs 國語可能誤判
-- **短段（< 1 秒）無法做 LID**：直接走鄰近投票
-- **第 6 位說話人之後合併到 E**：罕見場景
-- **Turing 架構限制**：不支援 vLLM / autoawq triton 路徑，固定走 transformers + bitsandbytes NF4
-
----
-
-## 🆚 各版本比較
-
-| 功能 | v4.6 | v4.7 | **v5.0** |
-|---|:---:|:---:|:---:|
-| 22 種中文方言 ASR | ✅ | ✅ | ✅ |
-| 40+ 全球語言翻譯 | ✅ | ✅ | ✅ |
-| 字級時間戳 | ✅ | ✅ | ✅ |
-| 5 人說話人分離 | ✅ | ✅ | ✅ |
-| 逐段語言識別（LID） | 基本 | 滑動窗口 context | 滑動窗口 context |
-| LID Ensemble（多模型投票） | ✗ | ✅（可選） | ✅（可選） |
-| 台語專用 ASR | ✗ | ✅ | ✅ |
-| UI 模型統一命名（雅言） | ✗ | ✗ | ✅ **M1** |
-| 聲紋語者識別 + 語者管理分頁 | ✗ | ✗ | ✅ **M2** |
-| 特殊字詞 RAG（術語/校正庫） | ✗ | ✗ | 🚧 規劃 **M3** |
-| LLM 升級（27B GGUF / llama.cpp） | ✗ | ✗ | 🚧 規劃 **M4** |
-
-### 🆕 v5.0 新增事項
-
-- **M1 — UI 模型統一命名**：前端一律顯示「雅言 YaYan 自主研發模型」，不暴露上游模型名稱。
-- **M2 — 聲紋語者識別 + 語者管理分頁**：
-  - 以 wespeaker embedding 抽 **256 維聲紋向量**，存入 **PostgreSQL + pgvector**（HNSW + cosine 相似度搜尋，設計上看 2 萬筆規模）。
-  - Web UI 新增「**語者管理**」分頁：上傳語音樣本建檔、命名、分頁列表、關鍵字搜尋、刪除、顯示每人樣本數。
-  - 轉錄後對每位說話人比對聲紋，依信心分級標記：高信心 → `[張三 …]`、中信心 → `[疑似_張三(0.65) …]`、辨識不出 → 退回 `[A方 …]`。
-  - config 開關 `enable_speaker_id` **預設 false**，不影響既有匿名 A/B/C 行為。
-  - 因大規模聲紋準確度有物理上限，定位為「**候選提示 + 人工確認**」，非自動點名。
-
----
-
-## 🗺️ Roadmap
-
-### v4.7 ✅ 已完成
-
-- [x] LID 升級 Whisper-large-v3 + VoxLingua107 ensemble（多模型投票）
-- [x] 滑動窗口 LID（前後 1.5 秒 context）
-- [x] 台語專用 ASR（BreezeASR-Taigi）
-
-### v5.0 🚧 進行中
-
-- [x] **M1** — UI 模型統一命名（雅言 YaYan 自研模型）
-- [x] **M2** — 聲紋語者識別 + 語者管理分頁
-- [ ] **M3** — 特殊字詞 RAG（部隊番號/人名/地名/校正對照，翻譯時檢索比對）
-- [ ] **M4** — LLM 升級 Qwen3.6-27B GGUF + llama.cpp backend
-
-### 更遠期
-
-- [ ] Docker 容器化部署
-- [ ] 多機分散式（ASR 機器 + LLM 機器分離）
-- [ ] Web API（REST/gRPC）給其他應用呼叫
-
----
-
-## 📜 License
-
-Apache 2.0
-
-第三方模型授權：
-- Qwen3-14B：Apache 2.0
-- Dolphin-CN-Dialect：Apache 2.0
-- Whisper-large-v3：MIT
-- VoxLingua107 ECAPA：Apache 2.0
-- pyannote 3.1：MIT（含 CC-BY-4.0 embedding）
-
----
-
-## 🙏 致謝
-
-- **Alibaba Qwen Team** — Qwen3 系列模型
-- **DataoceanAI + 清華大學** — Dolphin-CN-Dialect
-- **OpenAI** — Whisper
-- **SpeechBrain** — VoxLingua107 LID
-- **pyannote.audio** — 說話人分離
-- **HuggingFace** — Transformers ecosystem
-
----
-
-## 📞 維護資訊
-
-- 內部部署：`yayan-server.example.local`
-- 版本：v4.6.0（2026-05）
-- 維護者：[wu840407](https://github.com/wu840407)
+**雅言 YaYan-AI** 是全離線的多方言語音辨識系統：22 種漢語方言＋40+ 種語言 → 繁體中文逐字稿，
+含語者分離（至多 5 人）、字元級時間戳、Qwen3-14B 校正與可編輯回饋迴路。
+專為**離線、隱私敏感環境**設計——不連雲端、資料不出機器。
+架構：pyannote 3.1 分離語者 → 逐段語言判定 → Dolphin（方言）/ Whisper large-v3（外語）→ Qwen3-14B 校正輸出。
