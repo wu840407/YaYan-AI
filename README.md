@@ -4,6 +4,8 @@
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.3-EE4C2C)
 ![Offline](https://img.shields.io/badge/deployment-100%25_offline-brightgreen)
 ![Dialects](https://img.shields.io/badge/Chinese_dialects-22-orange)
+![Version](https://img.shields.io/badge/version-V4.6-green)
+![License](https://img.shields.io/badge/license-MIT-orange)
 
 > **Fully-offline multi-dialect speech intelligence system.**
 > Converts speech across **22 Chinese dialects and 40+ world languages** into structured
@@ -43,7 +45,7 @@ flowchart LR
 - **Per-segment language ID** — a single conversation can mix Mandarin, Hokkien and
   English; routing each segment independently prevents one dominant language from
   swallowing the others.
-- **Two-stage ASR routing** — dialect-specialized model (Dolphin) for Chinese variants,
+- **Two-stage ASR routing** — a dialect-specialized model (Dolphin) for Chinese variants,
   Whisper large-v3 for everything else; each model does only what it is best at.
 - **LLM correction stage** — Qwen3-14B normalizes ASR output into readable Traditional
   Chinese and fixes dialect-specific transcription artifacts.
@@ -61,14 +63,14 @@ flowchart LR
 | Output | Structured Traditional-Chinese transcript, per-speaker |
 | Correction | Qwen3-14B two-stage + editable feedback loop |
 | Deployment | 100 % offline — air-gapped & privacy-critical environments |
-| Interface | Gradio web UI |
+| Interface | Gradio web UI · batch mode (`auto_batch.py`) |
 
 ## Requirements
 
 | Component | Spec |
 |---|---|
 | OS | Ubuntu 22.04+ |
-| GPU | 2× NVIDIA GPU, ~20 GB VRAM each *<!-- TODO(確認): RTX 4000 Ada ×2 還是 RTX 6000 ×2？照實填 -->* |
+| GPU | 2× NVIDIA — supported profiles: **RTX 4000 Ada 20 GB** (`app_rtx4000.py`) · **RTX 6000 24 GB** (`app_rtx6000.py`) |
 | Driver / CUDA | 535+ / CUDA 12.1 |
 | Python | 3.10 |
 | Disk | ~50 GB (models ≈ 19 GB + workspace) |
@@ -83,20 +85,20 @@ git clone https://github.com/wu840407/YaYan-AI.git
 cd YaYan-AI
 pip install -r requirements.txt
 
-# Download models (online phase; system runs offline afterwards)
-bash scripts/download_models.sh   # <!-- TODO(確認): 對齊實際腳本名 -->
+# Download models (online phase; the system runs fully offline afterwards)
+bash scripts/download_models.sh
+python scripts/verify_models.py
 
-python app.py                     # Gradio UI on http://localhost:7860
+# Launch — pick the profile matching your GPUs
+python app_rtx4000.py     # dual RTX 4000 Ada → Gradio UI on http://localhost:7860
+python app_rtx6000.py     # dual RTX 6000
+
+# Batch mode
+bash scripts/start_batch.sh
 ```
 
-<!-- TODO(你補): 一張 Gradio 介面截圖或 20 秒 demo GIF，放 docs/img/，效果 > 一千字 -->
-
-## Performance
-
-<!-- TODO(你補,高價值): 一個小 benchmark 表 — 例:
-| 測試集 | 方言 | CER/WER | RTF |
-台語真實錄音 30 min | Hokkien | xx% | 0.x
-沒有數字也可先寫定性描述（1 小時錄音處理時間、單卡/雙卡差異） -->
+For fully air-gapped installation, see `scripts/install_offline.sh` and
+`scripts/verify_offline.py`.
 
 ## Roadmap
 
@@ -106,9 +108,10 @@ python app.py                     # Gradio UI on http://localhost:7860
 
 ## License & Author
 
-<!-- TODO(確認): 選 license，建議 MIT 或 Apache-2.0；模型各自沿用上游授權 -->
+MIT — see [`LICENSE`](LICENSE). Model weights retain their respective upstream licenses (see [`NOTICE.md`](NOTICE.md)).
+
 Maintained by [ChengRung Wu](https://wu840407.github.io) ([@wu840407](https://github.com/wu840407)).
-Questions / issues welcome.
+Questions and issues welcome.
 
 ---
 
@@ -117,4 +120,6 @@ Questions / issues welcome.
 **雅言 YaYan-AI** 是全離線的多方言語音辨識系統：22 種漢語方言＋40+ 種語言 → 繁體中文逐字稿，
 含語者分離（至多 5 人）、字元級時間戳、Qwen3-14B 校正與可編輯回饋迴路。
 專為**離線、隱私敏感環境**設計——不連雲端、資料不出機器。
-架構：pyannote 3.1 分離語者 → 逐段語言判定 → Dolphin（方言）/ Whisper large-v3（外語）→ Qwen3-14B 校正輸出。
+
+架構：pyannote 3.1 分離語者 → 逐段語言判定 → Dolphin（漢語方言）/ Whisper large-v3（外語）→ Qwen3-14B 校正輸出繁中逐字稿。
+雙 GPU 設定檔：RTX 4000 Ada（`app_rtx4000.py`）／RTX 6000（`app_rtx6000.py`）。
