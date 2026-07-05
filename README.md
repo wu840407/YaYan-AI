@@ -100,9 +100,22 @@ bash scripts/start_batch.sh
 For fully air-gapped installation, see `scripts/install_offline.sh` and
 `scripts/verify_offline.py`.
 
+## Performance
+
+| Category | Accuracy | Note |
+|---|---|---|
+| Standard Mandarin | ~99% | Character-level |
+| Chinese dialects | ~75% | Bounded by current model size on dual 20–24 GB GPUs |
+
+The dialect gap is primarily a model-capacity constraint. Accuracy improvements
+are on the roadmap below (larger models on H200 hardware + dialect-specific
+term-bank and corpora).
+
 ## Roadmap
 
-- [ ] Fine-tuning on H200 hardware for Taiwanese-Hokkien accuracy (2026 H2)
+- [ ] Larger models on H200 ×2 hardware to lift dialect accuracy (2026 H2)
+- [ ] RAG term-bank for domain / dialect vocabulary
+- [ ] Fine-tuning on public academic dialect corpora
 - [ ] Kafka-based high-throughput batch pipeline
 - [ ] Streaming (real-time) mode
 
