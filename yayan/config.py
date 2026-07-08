@@ -29,6 +29,9 @@ def _override_from_env(cfg: Dict[str, Any]) -> Dict[str, Any]:
     env_output = os.environ.get("YAYAN_OUTPUT_DIR")
     if env_output:
         cfg["paths"]["output_dir"] = env_output
+    env_port = os.environ.get("YAYAN_SERVER_PORT")
+    if env_port:
+        cfg["server"]["port"] = int(env_port)
     return cfg
 
 
