@@ -649,21 +649,29 @@ def build_ui() -> gr.Blocks:
                             interactive=False,
                         )
 
+                # 吃 GPU 的重事件（ASR+LLM）綁同一 concurrency_id 且限 1：彼此排隊、
+                # 全速跑、避免兩份同時搶 cuda:0/cuda:1 而互相拖慢或 OOM。輕操作不受此限。
                 transcribe_btn.click(
                     fn=fn_transcribe,
                     inputs=[audio_input, dialect, enable_diarize],
                     outputs=[info_box, raw_text_display, raw_text_box, translated_box,
                              confidence_box, orig_translated],
+                    concurrency_id="gpu",
+                    concurrency_limit=1,
                 )
                 refine_raw_btn.click(
                     fn=fn_refine,
                     inputs=[raw_text_display, raw_text_box, dialect],
                     outputs=[translated_box],
+                    concurrency_id="gpu",
+                    concurrency_limit=1,
                 )
                 refine_translated_btn.click(
                     fn=fn_refine,
                     inputs=[raw_text_display, translated_box, dialect],
                     outputs=[translated_box],
+                    concurrency_id="gpu",
+                    concurrency_limit=1,
                 )
                 save_btn.click(
                     fn=fn_save_as,
@@ -962,10 +970,14 @@ def main():
             print(f"⚠️ 術語庫初始化失敗（術語庫分頁不可用，翻譯不受影響）：{e}")
 
     demo = build_ui()
+    # allowed_paths：Gradio 4.x 只允許下載 cwd/暫存目錄內的檔案；輸出檔寫在 output_dir
+    # （絕對路徑，服務 cwd 之外），未列入就會下載失敗。涵蓋「另存新檔」與「聲道分離」兩處下載。
+    allowed = [str(Path(CONFIG["paths"]["output_dir"]).resolve())]
     demo.queue(default_concurrency_limit=2).launch(
         server_name=server_cfg["host"],
         server_port=server_cfg["port"],
         share=server_cfg["share"],
+        allowed_paths=allowed,
     )
 
 

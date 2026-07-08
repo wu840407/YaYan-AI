@@ -210,7 +210,7 @@ def search(embedding, top_k: int = 5, ef_search: int = 100) -> List[Dict]:
 def list_speakers(
     page: int = 1, page_size: int = 20, keyword: str = ""
 ) -> Tuple[List[Dict], int]:
-    """分頁列表（可關鍵字過濾姓名），回傳 (這頁的列表, 總筆數)。"""
+    """分頁列表（關鍵字過濾姓名；純數字關鍵字同時比對語者 id），回傳 (這頁的列表, 總筆數)。"""
     page = max(1, int(page))
     page_size = max(1, int(page_size))
     offset = (page - 1) * page_size
@@ -219,13 +219,20 @@ def list_speakers(
     with closing(_connect()) as conn, conn.cursor() as cur:
         if kw:
             like = f"%{kw}%"
-            cur.execute("SELECT count(*) FROM speakers WHERE name ILIKE %s;", (like,))
+            # 純數字關鍵字同時比對 id（精確）與姓名（模糊）；非數字只比對姓名。
+            if kw.isdigit():
+                where = "(name ILIKE %s OR id = %s)"
+                filter_params: tuple = (like, int(kw))
+            else:
+                where = "name ILIKE %s"
+                filter_params = (like,)
+            cur.execute(f"SELECT count(*) FROM speakers WHERE {where};", filter_params)
             total = cur.fetchone()[0]
             cur.execute(
                 "SELECT id, name, note, sample_count, created_at, updated_at "
-                "FROM speakers WHERE name ILIKE %s "
+                f"FROM speakers WHERE {where} "
                 "ORDER BY updated_at DESC LIMIT %s OFFSET %s;",
-                (like, page_size, offset),
+                (*filter_params, page_size, offset),
             )
         else:
             cur.execute("SELECT count(*) FROM speakers;")
