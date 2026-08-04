@@ -95,6 +95,9 @@ llm:
   tensor_parallel_size: 1
   openai_base_url: "http://127.0.0.1:8001/v1"
   served_model_name: "YaYan_Reasoner"
+  # M4：openai backend 對接的 server 種類。vllm（預設，維持既有行為）| llamacpp
+  # 只在 backend: openai 時生效；backend: transformers 時完全不讀。
+  openai_flavor: vllm
 
 diarize:
   enabled: true

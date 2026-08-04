@@ -3,9 +3,11 @@
 支援三個後端：
 - transformers + bitsandbytes 4-bit  (預設，Turing 穩定)
 - vllm in-process                    (較快，但會獨佔 process 的 CUDA_VISIBLE_DEVICES)
-- openai-compatible (vLLM serve)     (推薦：LLM 與 ASR process 隔離，雙卡乾淨)
+- openai-compatible (vLLM serve / llama.cpp llama-server)
+                                     (推薦：LLM 與 ASR process 隔離，雙卡乾淨)
 
 backend 設定於 configs/default.yaml -> llm.backend
+openai backend 再由 llm.openai_flavor 區分 server 種類（vllm | llamacpp）。
 """
 from __future__ import annotations
 
@@ -25,11 +27,11 @@ class LlmClient:
     def __init__(self, alias: str = "YaYan_Reasoner"):
         self.alias = alias
         self.local_dir: Path = model_path(alias)
-        if not self.local_dir.exists():
-            raise FileNotFoundError(f"{alias} 不存在: {self.local_dir}")
-
         self.device = CONFIG["devices"]["llm_gpu"]
         self.backend = CONFIG["llm"]["backend"].lower()
+        # openai backend 的權重由 server 端持有（可能是 GGUF），本地目錄允許缺席
+        if not self.local_dir.exists() and self.backend != "openai":
+            raise FileNotFoundError(f"{alias} 不存在: {self.local_dir}")
         self._tokenizer = None
         self._model = None
         self._vllm = None
@@ -153,13 +155,18 @@ class LlmClient:
         self._oai = OpenAI(base_url=base_url, api_key="dummy")
         self._served_name = served_name
 
-        # 仍保留本地 tokenizer，需要時可用來計算 token 數 / 預組 chat template
+        # 仍保留本地 tokenizer，需要時可用來計算 token 數 / 預組 chat template。
+        # GGUF-only 或目錄缺席時載不到，屬預期情況：openai 路徑的 chat() 不用 tokenizer。
         from transformers import AutoTokenizer
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            str(self.local_dir),
-            trust_remote_code=True,
-            local_files_only=True,
-        )
+        try:
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                str(self.local_dir),
+                trust_remote_code=True,
+                local_files_only=True,
+            )
+        except Exception as e:
+            self._tokenizer = None
+            logger.warning(f"本地 tokenizer 未載入（{type(e).__name__}），openai 後端不需要它：{e}")
 
     # ------------------------------------------------------------------ #
     # Public chat
@@ -256,14 +263,30 @@ class LlmClient:
             temperature=temperature,
             top_p=cfg.get("top_p", 0.9),
             max_tokens=max_new_tokens,
-            extra_body={
-                "top_k": cfg.get("top_k", 20),
-                "repetition_penalty": cfg.get("repetition_penalty", 1.05),
-                # 關閉 Qwen3 thinking（vLLM serve 端要求 chat_template_kwargs）
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
+            extra_body=self._openai_extra_body(),
         )
         return resp.choices[0].message.content.strip()
+
+    def _openai_extra_body(self) -> Dict:
+        """依 server flavor 組 extra_body。
+
+        vLLM 與 llama.cpp 的 OpenAI 相容層在兩處不一致，混用會被靜默忽略：
+        - 重複懲罰：vLLM 叫 repetition_penalty，llama.cpp 叫 repeat_penalty
+        - 關 thinking：llama.cpp 對 Qwen3 系列光靠 chat_template_kwargs 不可靠，
+          另外送 reasoning_effort=none（server 端再配 --reasoning-budget 0 雙保險）
+        """
+        cfg = CONFIG["llm"]
+        flavor = (cfg.get("openai_flavor") or "vllm").lower()
+        body: Dict = {
+            "top_k": cfg.get("top_k", 20),
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        if flavor == "llamacpp":
+            body["repeat_penalty"] = cfg.get("repetition_penalty", 1.05)
+            body["reasoning_effort"] = "none"
+        else:
+            body["repetition_penalty"] = cfg.get("repetition_penalty", 1.05)
+        return body
 
     # ------------------------------------------------------------------ #
     # High-level helpers
