@@ -20,7 +20,7 @@ os.environ["HF_HOME"] = os.path.abspath("./models_cache")
 # ==========================================
 # 檢查是否有兩張顯卡
 if torch.cuda.device_count() >= 2:
-    print(f"🚀 偵測到雙顯卡環境！啟動戰術分工模式...")
+    print(f"🚀 偵測到雙顯卡環境！啟動雙卡分工模式...")
     device_asr = "cuda:0"  # 第一張卡負責聽 (Whisper)
     device_llm = "cuda:1"  # 第二張卡負責想 (Llama)
 else:
@@ -156,12 +156,12 @@ def process_audio(audio_path, source_dialect, target_style):
 # 5. 建立 Gradio 介面
 # ==========================================
 with gr.Blocks(title="YaYan-AI 雅言系統 (Server Edition)") as demo:
-    gr.Markdown("# 🏺 YaYan-AI (雅言) - 戰術情報版")
-    gr.Markdown("Based on **Dual RTX 4000 Ada** | **Whisper-Large-v3** | **Llama-3.1-8B**")
+    gr.Markdown("# 🏺 YaYan-AI (雅言) - 離線部署版")
+    gr.Markdown("Based on **Dual RTX 4000 Ada** | **雅言 YaYan 自主研發語音辨識模型** | **雅言 YaYan 自主研發翻譯模型**")
     
     with gr.Row():
         with gr.Column(scale=1):
-            audio_input = gr.Audio(sources=["microphone", "upload"], type="filepath", label="情報錄音輸入")
+            audio_input = gr.Audio(sources=["microphone", "upload"], type="filepath", label="錄音輸入")
             
             dialect_dropdown = gr.Dropdown(
                 choices=["台灣口語/台灣國語", "廣東話 (粵語)", "四川話", "上海話", "維吾爾語", "其他方言"], 
@@ -169,8 +169,8 @@ with gr.Blocks(title="YaYan-AI 雅言系統 (Server Edition)") as demo:
                 label="來源語言"
             )
             style_dropdown = gr.Radio(
-                choices=["標準情報摘要 (正體)", "逐字精準翻譯", "戰術意圖分析"], 
-                value="標準情報摘要 (正體)", 
+                choices=["標準內容摘要 (正體)", "逐字精準翻譯", "語意重點分析"],
+                value="標準內容摘要 (正體)",
                 label="輸出模式"
             )
             
