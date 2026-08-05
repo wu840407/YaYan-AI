@@ -258,8 +258,24 @@ def transcribe(
 
 
 def _strip_special_tokens(text: str) -> str:
-    """移除 Dolphin 各種特殊 token：<|...|>, <CN>, <notimestamp>, <0.50> 等。"""
+    """移除 Dolphin 各種特殊 token：<|...|>, <CN>, <notimestamp>, <0.50> 等，
+    並清掉洩漏的 SentencePiece 詞邊界標記 U+2581（▁）。
+
+    ▁ 在中文語音夾雜英文時很常見（「好嘞▁O▁K」「這個▁A▁S會有問題」），
+    正式 log 實測約 4.7% 的輸出含有它。它是分詞內部標記，不該出現在成品文字裡。
+    """
     text = re.sub(r"<\|[^|]*\|>", "", text)
     text = re.sub(r"<[A-Za-z][A-Za-z0-9_-]*>", "", text)
     text = re.sub(r"<\d+(?:\.\d+)?>", "", text)
+
+    if "▁" in text:
+        # ▁ 代表「詞開頭」→ 還原成空白，而不是直接刪除：直接刪會把
+        # 「▁GO▁HOME」黏成「GOHOME」。
+        text = text.replace("▁", " ")
+        # 刻意不把「O K」黏成「OK」：▁O▁K▁O▁K 是「OK」連說兩次，一律合併會變成
+        # 「OKOK」。留成「O K O K」語意不失真，後續 LLM 潤飾階段會自然正規化。
+        text = re.sub(r"\s{2,}", " ", text)
+        # 中文字之間不該有空白（▁ 出現在中文邊界時會插進來）
+        text = re.sub(r"(?<=[一-鿿])\s+(?=[一-鿿])", "", text)
+
     return text.strip()
