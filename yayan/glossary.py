@@ -400,6 +400,72 @@ def glossary_for_text(text: str, source_lang: str = "any") -> str:
     return format_glossary_block(lookup(text, source_lang))
 
 
+# ─────────────────────── ASR 後處理：確定性術語替換 ───────────────────────
+
+_CORRECTION_TYPES = ("typo_fix", "correction")
+
+
+def correction_pairs(source_lang: str = "any") -> List[Tuple[str, str]]:
+    """取「錯字 → 正確字」對照表，長詞優先。
+
+    只用 typo_fix / correction：proper_noun 的 term 本身就是正確寫法，
+    term→correct 等於 no-op，放進來只會拖慢替換。
+    """
+    try:
+        rows = _load_cache()
+    except Exception as e:
+        logger.warning("術語校正表載入失敗（略過後處理）：%s", e)
+        return []
+
+    all_langs = (source_lang or "any").strip().lower() in ("", "any", "auto")
+    pairs: List[Tuple[str, str]] = []
+    seen: set = set()
+    for r in rows:
+        if (r.get("term_type") or "") not in _CORRECTION_TYPES:
+            continue
+        if not all_langs and not _lang_ok(r.get("source_lang"), source_lang):
+            continue
+        wrong = _TAG_RE.sub("", (r.get("term") or "")).strip()
+        right = _TAG_RE.sub("", (r.get("correct") or "")).strip()
+        if not wrong or not right or wrong == right:
+            continue
+        if wrong in seen:
+            continue
+        seen.add(wrong)
+        pairs.append((wrong, right))
+
+    # 長詞優先：否則短詞會先吃掉長詞的一部分（「文超」先替換掉「陳文超」的後半）
+    pairs.sort(key=lambda t: -len(t[0]))
+    return pairs
+
+
+def apply_corrections(text: str, source_lang: str = "any") -> Tuple[str, int]:
+    """把術語庫的錯字對照直接套用在 ASR 逐字稿上，回傳 (新文字, 替換次數)。
+
+    這是 hotword 偏置的替代方案：偏置要看模型臉色（實測 dolphin-small 上無效），
+    字串替換則是確定性的——只要詞條建得對，一定會被修正。
+
+    用單次 regex alternation 掃描，不做連鎖替換：若同時有 A→B 與 B→C 兩條規則，
+    A 只會變成 B，不會再被推成 C（避免規則互相串接產生意料外結果）。
+    """
+    if not text:
+        return text, 0
+    pairs = correction_pairs(source_lang)
+    if not pairs:
+        return text, 0
+
+    mapping = {w: r for w, r in pairs}
+    pattern = re.compile("|".join(re.escape(w) for w, _ in pairs))
+    count = 0
+
+    def _sub(mo):
+        nonlocal count
+        count += 1
+        return mapping[mo.group(0)]
+
+    return pattern.sub(_sub, text), count
+
+
 # ──────────────────────────── ASR hotword 偏置 ────────────────────────────
 
 def hotwords_for_asr(source_lang: str = "any", limit: Optional[int] = None) -> List[str]:

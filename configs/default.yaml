@@ -127,6 +127,7 @@ rag:
   enable_rag: false                # ★ 預設 false：不檢索、不注入，翻譯 prompt 與既有逐字相同
   max_inject_terms: 20             # 每批最多注入幾條術語（避免稀釋 LLM 注意力）
   max_asr_hotwords: 50             # ASR hotword 偏置最多取幾條（太多會稀釋偏置效果）
+  enable_asr_correction: false     # ★ 預設 false：不做 ASR 後處理術語替換，逐字稿與既有相同
   enable_fuzzy: true               # 是否做模糊比對（difflib，無需 DB extension）
   fuzzy_threshold: 0.86            # 模糊命中相似度門檻（0~1，越高越嚴）
   fuzzy_min_len: 2                 # 術語正規化長度 < 此值不做模糊（避免單字亂配）

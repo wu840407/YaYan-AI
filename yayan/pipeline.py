@@ -319,6 +319,26 @@ def _batched_translate(
     return "\n".join(translated_chunks)
 
 
+def _apply_asr_corrections(text: str, routing: str) -> str:
+    """ASR 後處理：套用術語庫的錯字對照（開關 rag.enable_asr_correction，預設關）。
+
+    在 OpenCC 轉正體之後才做，字集才與術語庫一致；在加時間戳前綴之前做，
+    替換規則不會誤傷 [A方 00:01-00:05] 這類標記。
+    任何失敗都回原文——術語庫掛掉不該讓轉錄跟著掛。
+    """
+    if not CONFIG.get("rag", {}).get("enable_asr_correction", False):
+        return text
+    try:
+        from .glossary import apply_corrections
+        fixed, n = apply_corrections(text, source_lang=routing or "any")
+        if n:
+            logger.info(f"ASR 後處理術語替換 {n} 處")
+        return fixed
+    except Exception as e:
+        logger.warning(f"ASR 術語後處理失敗，保留原文：{e}")
+        return text
+
+
 def transcribe_audio(
     audio_path: str,
     language: str = "auto",
@@ -478,6 +498,7 @@ def transcribe_audio(
 
         if r.text:
             text_tw = to_taiwan_traditional(r.text)
+            text_tw = _apply_asr_corrections(text_tw, routing)
             segments.append(Segment(
                 start=start, end=end,
                 speaker=speaker_label,
