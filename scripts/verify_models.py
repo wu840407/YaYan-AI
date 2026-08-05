@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""v4.6 模型驗證腳本。"""
+"""模型驗證腳本。"""
 from __future__ import annotations
 
 import json
@@ -97,7 +97,7 @@ def _check_dolphin_sdk():
 
 def main():
     print("=" * 64)
-    print(f"  YaYan-AI v4.6 模型檢查")
+    print(f"  YaYan-AI 模型檢查")
     print(f"  models_root: {CONFIG['paths']['models_root']}")
     print(f"  llm.backend: {CONFIG['llm'].get('backend')} | quant: {CONFIG['llm'].get('quantization')}")
     print("=" * 64)

@@ -1,4 +1,4 @@
-"""YaYan-AI v4.6 端到端流程（含分批翻譯）。"""
+"""YaYan-AI 端到端流程（含分批翻譯）。"""
 from __future__ import annotations
 
 import logging
@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import librosa
 import numpy as np
 
+from . import __version__
 from .config import CONFIG
 from .llm import LlmClient, to_taiwan_traditional
 
@@ -76,7 +77,7 @@ def _get_llm() -> LlmClient:
 
 def warmup() -> None:
     _get_llm()
-    logger.info("YaYan-AI v4.6 warmup 完成。")
+    logger.info(f"YaYan-AI v{__version__} warmup 完成。")
 
 
 def _load_audio(path: str) -> np.ndarray:

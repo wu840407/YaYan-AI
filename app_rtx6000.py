@@ -1,5 +1,5 @@
 """
-YaYan-AI v4.6 — Quadro RTX 6000 (Turing) x 2 主介面
+YaYan-AI — Quadro RTX 6000 (Turing) x 2 主介面
 """
 from __future__ import annotations
 
@@ -43,10 +43,12 @@ from yayan import channel_split
 from yayan import glossary
 
 
-# ★ v4.6: 22 中文方言全部展開
+# 22 中文方言全部展開
 DIALECT_TO_ROUTING = {
     "🔍 自動偵測（建議：逐段 LID）": "auto",
-    "🇹🇼 國台混合 / 多方言混雜": "auto",
+    # ⚠️ 這兩項都走 auto。自動偵測分不出漢語方言，**台語請直接選下方的
+    #    「閩南語 / 台語」**，選這裡不會啟用台語專用引擎。
+    "🔀 多方言混雜（自動偵測，不指定方言）": "auto",
     # ── 北方官話 ──
     "🇨🇳 北京話 / 普通話": "zh",
     "🇨🇳 東北話": "cmn-ne",
@@ -168,18 +170,35 @@ def _calc_confidence(result: TranscriptionResult) -> tuple[float, str]:
     elif raw_text and not translated:
         score -= 30; notes.append("LLM 翻譯失敗")
 
-    lid_confs = [s.lid_conf for s in segments if s.lid_conf > 0]
-    if lid_confs:
-        avg_lid = statistics.mean(lid_confs)
-        if avg_lid < 0.4:
-            score -= 15; notes.append(f"LID 信心低({avg_lid:.2f})")
-        elif avg_lid < 0.5:
-            score -= 5; notes.append(f"LID 信心中({avg_lid:.2f})")
-    
-    fallback_count = sum(1 for s in segments if s.lid_method in ("fallback", "lid_error"))
-    if segments and fallback_count / len(segments) > 0.3:
+    # LID 只計「真的由模型判出來」的段落。user_hint 的 conf 固定是 1.0，
+    # 那代表使用者手動指定、不是模型信心，計入會讓分數虛胖。
+    model_lid = [
+        s.lid_conf for s in segments
+        if s.lid_conf > 0 and s.lid_method not in ("user_hint", "fallback", "default")
+    ]
+    if model_lid:
+        avg_lid = statistics.mean(model_lid)
+        # 連續扣分取代級距：0.9 以上幾乎不扣，0.4 附近扣滿 20
+        penalty = max(0.0, min(20.0, (0.90 - avg_lid) * 40))
+        if penalty >= 1.0:
+            score -= penalty
+            notes.append(f"LID 平均信心 {avg_lid:.2f}")
+    elif any(s.lid_method == "user_hint" for s in segments):
+        notes.append("語言為手動指定")
+
+    err_count = sum(1 for s in segments if s.lid_method == "lid_error")
+    if err_count:
+        score -= 15
+        notes.append(f"LID 異常 {err_count}/{len(segments)} 段")
+    fb_count = sum(1 for s in segments if s.lid_method == "fallback")
+    if segments and fb_count / len(segments) > 0.3:
         score -= 10
-        notes.append(f"LID 失敗段過多")
+        notes.append("LID 判不出的段落偏多")
+
+    # 逐字稿可讀性（enable_quality_hint 開啟時才有值）
+    if getattr(result, "quality_hint", ""):
+        score -= 20
+        notes.append("逐字稿可讀性偏低，可能語言選錯")
 
     score = max(0.0, min(100.0, score))
     note_text = "、".join(notes) if notes else "品質良好"
@@ -596,6 +615,8 @@ def build_ui() -> gr.Blocks:
                             choices=DIALECT_CHOICES,
                             value="🔍 自動偵測（建議：逐段 LID）",
                             label="來源語言",
+                            info="台語／粵語等特定方言請直接指定——自動偵測分不出漢語方言，"
+                                 "指定後才會啟用該語言的專用辨識引擎。",
                         )
                         enable_diarize = gr.Checkbox(
                             label="啟用說話人分離（A方/B方/C方/D方/E方）",
@@ -696,7 +717,16 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown(
                     """
                     ---
-                    **v4.6 新功能：**
+                    **本版新增（v5.1）：**
+                    - **台語專用辨識引擎**：來源語言選「閩南語 / 台語」即啟用，
+                      辨識品質明顯優於通用引擎（自動偵測分不出台語，必須手動指定）
+                    - **語言選擇提示**：逐字稿明顯不成句時，於識別資訊提醒可能選錯語言
+                    - **術語庫**：專名統一譯法、同音錯字自動校正（見「術語庫管理」分頁）
+                    - **聲紋語者識別**：建檔後自動標註說話人姓名（見「語者管理」分頁）
+                    - **多聲道分離**：立體聲／多軌音檔拆成單聲道（見「聲道分離」分頁）
+                    - **識別精準度**：改用連續評分，並納入語言判定信心與逐字稿可讀性
+
+                    **既有功能：**
                     - **22 種中文方言**：含福州話、客家話、湘贛晉、潮汕、海南、蘇杭吳語細分等
                     - **字級時間戳**：每段顯示 `[A方 00:01-00:05] 內容`
                     - **逐段語言識別**：混合語音每段獨立判斷

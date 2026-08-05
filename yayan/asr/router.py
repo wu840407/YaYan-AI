@@ -1,6 +1,6 @@
 """YaYan ASR 路由器：依 routing key 決定走哪個 ASR 引擎。
 
-v4.6 變動：
+歷史變動（v4.6）：
   - 漢語方言（22 種）→ YaYan_ASR_Dialect (Dolphin-CN-Dialect-Small)
   - 日韓 → YaYan_ASR_Global (Whisper-large-v3，比 SenseVoice 在日韓更強)
   - 中亞 (bo/ug) → YaYan_ASR_Dialect (Dolphin 也支援)
@@ -156,7 +156,7 @@ def _dolphin_transcribe(
 def _taigi_transcribe(
     audio: np.ndarray, routing: str, chunk_start_sec: float,
 ) -> ASRResult:
-    """v4.7-C：台語專用 Whisper-medium-zh-tw。回傳純文字（無 word timestamp）。"""
+    """台語專用 ASR（Breeze-ASR-26）。回傳純文字，無 word timestamp。"""
     from . import whisper_taigi as _taigi
     text = _taigi.transcribe(audio, language_hint=routing)
     return ASRResult(
