@@ -34,6 +34,20 @@ DOLPHIN_ROUTINGS = {
 _DEFAULT_TAIGI_ROUTINGS = {"nan", "nan-cs", "nan-hn", "min", "hokkien"}
 
 
+def _force_whisper_routings() -> set:
+    """強制改走 Whisper 的 routing key（config asr.force_whisper_routings）。
+
+    用途：Dolphin-small 對某些語種覆蓋不佳時的逃生門。實測 yue（粵語）在
+    Dolphin 只吐國語轉寫，Whisper 指定 language=cantonese 才會產出真正的粵文；
+    bo（藏語）在 Dolphin 被映射成 zh-CN，等於當中文解碼。
+    repo 預設空集合＝行為與既有完全相同。
+    """
+    v = CONFIG["asr"].get("force_whisper_routings") or []
+    if isinstance(v, str):
+        v = [v]
+    return {str(x).strip().lower() for x in v if str(x).strip()}
+
+
 def _taigi_routings() -> set:
     cfg = CONFIG["asr"].get("taigi_routings")
     return {str(r).lower() for r in cfg} if cfg else _DEFAULT_TAIGI_ROUTINGS
@@ -73,6 +87,11 @@ def transcribe(
             return _taigi_transcribe(audio, routing, chunk_start_sec)
         except Exception as e:
             logger.warning(f"台語專用 ASR 失敗，退回 Dolphin（routing={routing}）: {e}")
+
+    # 有些語種 Dolphin-small 覆蓋不佳，改交給 Whisper（config 列表，repo 預設空＝行為不變）
+    if routing in _force_whisper_routings():
+        logger.info(f"routing={routing} 在 force_whisper 清單中，改走 Whisper")
+        return _whisper_transcribe(audio, routing, chunk_start_sec)
 
     if routing in DOLPHIN_ROUTINGS or routing == "auto":
         # 包含 auto → Dolphin 自己會做 LID

@@ -150,7 +150,10 @@ def transcribe(
         if mapping:
             lang_sym, region_sym = mapping
             kwargs["lang_sym"] = lang_sym
-            if region_sym and region_sym not in ("NULL", "AUTO"):
+            # ⚠️ "NULL" 是 Dolphin 的合法 region 字面值（ct-NULL / ug-NULL 都在
+            # LANGUAGE_REGION_CODES 裡），不可以當成「不要傳」而略過——省略時
+            # 粵語輸出會多出 "IT" 之類的雜訊 token。只有 AUTO 才是真的不傳。
+            if region_sym and region_sym != "AUTO":
                 kwargs["region_sym"] = region_sym
         # else: 不傳 lang_sym/region_sym，Dolphin 走全自動
 

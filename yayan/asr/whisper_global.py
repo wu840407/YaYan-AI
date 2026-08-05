@@ -35,11 +35,34 @@ def _load():
     return _PIPE
 
 
+# routing key → Whisper 語言名稱。不給提示時 Whisper 會自己判，但實測誤判代價很大：
+# 粵語不指定 language=cantonese 會被轉寫成國語（「我哋嘅」變「我们的」），
+# 指定後才輸出真正的粵文。名稱必須是 Whisper 認得的英文全名，不是 ISO 代碼。
 _LANG_HINT = {
     "fa": "persian",
     "ur": "urdu",
     "en": "english",
     "ar": "arabic",
+    # 粵語：Whisper large-v3 才有 yue，是目前唯一能產出粵文的路徑
+    "yue": "cantonese",
+    "yue-hk": "cantonese",
+    "yue-gz": "cantonese",
+    # 藏語：Dolphin 把 bo 映射成 zh-CN（當中文解碼），Whisper 有原生藏語
+    "bo": "tibetan",
+    # 其餘 config routing 表裡既有的語種，補上提示減少自動偵測誤判
+    "ja": "japanese",
+    "ko": "korean",
+    "hi": "hindi",
+    "fr": "french",
+    "de": "german",
+    "ru": "russian",
+    "es": "spanish",
+    "th": "thai",
+    "ms": "malay",
+    "vi": "vietnamese",
+    "id": "indonesian",
+    # ⚠️ ug（維吾爾語）刻意不列：Whisper 100 種語言裡沒有維語，
+    #    指定會直接拋 Unsupported language。維語目前無可用引擎，見 PROJECT-HISTORY。
 }
 
 
