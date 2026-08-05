@@ -220,6 +220,9 @@ def fn_transcribe(audio_path, dialect_label, enable_diarize):
         f"📊 語言分布：{breakdown_text}\n"
         f"👥 說話人：{n_speakers} 位｜段數：{len(result.segments)}"
     )
+    # 可讀性偏低時附上建議（只提示，不自動改引擎；開關 asr.enable_quality_hint）
+    if getattr(result, "quality_hint", ""):
+        info += f"\n{result.quality_hint}"
     confidence, note = _calc_confidence(result)
     score_text = f"{confidence:.1f} / 100\n{note}"
     return (

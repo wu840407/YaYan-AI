@@ -31,6 +31,8 @@ asr:
   enable_asr_hotwords: false    # ★ 預設 false：不做術語偏置，ASR 行為與既有完全相同
   # Dolphin 判出 region=MINNAN 時改交台語專用 ASR 重跑。
   # 存在理由：VoxLingua107 標籤集沒有閩南語，自動模式永遠判不出台語。
+  # 逐字稿明顯不成句時，在 UI 提示「可能語言選錯」。只提示，不自動換引擎。
+  enable_quality_hint: false
   enable_minnan_redirect: false
   enable_taigi_asr: true         # v4.7-C：台語(nan)改走專用 Breeze-ASR-26（已離線放入權重並驗證；缺失自動退回 Dolphin）
   taigi_routings: [nan, nan-cs, nan-hn]   # v4.7-C：觸發台語專用 ASR 的 routing key

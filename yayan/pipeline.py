@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -40,6 +41,7 @@ class TranscriptionResult:
     raw_text: str = ""
     translated_text: str = ""
     language_breakdown: Dict[str, int] = field(default_factory=dict)
+    quality_hint: str = ""   # 逐字稿明顯不成句時的建議文字；空字串＝沒有可提示的問題
 
     def to_dict(self) -> dict:
         return {
@@ -49,6 +51,7 @@ class TranscriptionResult:
             "language_breakdown": self.language_breakdown,
             "raw_text": self.raw_text,
             "translated_text": self.translated_text,
+            "quality_hint": self.quality_hint,
             "segments": [
                 {
                     "start": s.start, "end": s.end, "speaker": s.speaker,
@@ -319,6 +322,64 @@ def _batched_translate(
     return "\n".join(translated_chunks)
 
 
+_HINT_ZH_ROUTINGS = {
+    "zh", "cmn", "auto", "wuu", "hsn", "gan", "cjy", "hak", "cdo",
+    "cmn-sw", "cmn-sd", "cmn-ne", "cmn-zy", "cmn-wh", "cmn-xa", "cmn-lz", "cmn-jh",
+    "wuu-sz", "wuu-nb", "wuu-wz",
+}
+
+
+def _quality_hint(raw_text: str, user_hint: str, lang_counter) -> str:
+    """逐字稿可讀性守門：明顯不成句時回傳一句建議，**不自動切換引擎**。
+
+    存在理由：VoxLingua107 分不出漢語方言，自動模式一律走通用 Dolphin；
+    台語、福州話等在 Dolphin 下會崩成不成詞的字串（「控把繃」「經典博案」），
+    但使用者不見得看得出那是引擎選錯而不是原音就這樣。
+
+    刻意只提示不切換：可讀性判斷會把「本來就講得破碎」的錄音誤判成辨識失敗，
+    自動換引擎會在使用者不知情下改變結果；提示則讓人保有判斷權。
+
+    任何失敗都回空字串——這是加分提示，不能讓它擋掉轉錄。
+    """
+    if not CONFIG["asr"].get("enable_quality_hint", False):
+        return ""
+    # 使用者已明確指定語言 → 他已經做過選擇，再建議「改選語言」只是雜訊
+    if (user_hint or "auto") != "auto":
+        return ""
+    # 只對走漢語方言引擎的結果提示；日韓歐美走 Whisper，不適用
+    dominant = lang_counter.most_common(1)[0][0] if lang_counter else "auto"
+    if dominant not in _HINT_ZH_ROUTINGS:
+        return ""
+
+    # 去掉時間戳前綴再取樣，避免 [A方 00:01-00:05] 干擾判斷
+    body = re.sub(r"\[[^\]]*\]", "", raw_text or "").strip()
+    body = re.sub(r"\s+", "", body)
+    if len(body) < 40:
+        return ""          # 太短，判不準
+    sample = body[:400]
+
+    try:
+        prompt = (
+            "下面是一段語音辨識的逐字稿。請判斷它是否為可理解的自然語句。"
+            "如果出現明顯不成詞、語義斷裂的片段，視為辨識失敗。"
+            "只回答『通順』或『不通順』，不要解釋。\n\n逐字稿：" + sample
+        )
+        verdict = _get_llm().chat(
+            [{"role": "user", "content": prompt}], max_new_tokens=20
+        )
+    except Exception as e:
+        logger.warning(f"可讀性判斷失敗，略過提示：{e}")
+        return ""
+
+    if "不通順" not in (verdict or ""):
+        return ""
+    return (
+        "⚠️ 逐字稿可讀性偏低，可能是語言選擇不符。"
+        "若這段錄音是閩南語／台語、粵語或其他特定方言，"
+        "請在「來源語言」改選對應項目後重新辨識——自動偵測分不出漢語方言。"
+    )
+
+
 def _apply_asr_corrections(text: str, routing: str) -> str:
     """ASR 後處理：套用術語庫的錯字對照（開關 rag.enable_asr_correction，預設關）。
 
@@ -555,6 +616,7 @@ def transcribe_audio(
         raw_text=raw_text,
         translated_text=translated,
         language_breakdown=dict(lang_counter),
+        quality_hint=_quality_hint(raw_text, user_hint, lang_counter),
     )
 
 
