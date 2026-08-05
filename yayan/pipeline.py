@@ -403,7 +403,7 @@ def transcribe_audio(
     enable_lid = asr_cfg["enable_lid"]
     seg_routings: List[Tuple[str, float, str]] = []
 
-    if enable_lid:
+    if enable_lid and user_hint == "auto":
         # v4.7-A：逐段 LID 借前後 context（可由 config 關閉）
         use_lid_context = asr_cfg.get("enable_lid_context", False)
         lid_context_sec = float(asr_cfg.get("lid_context_sec", 1.5))
@@ -446,6 +446,9 @@ def transcribe_audio(
                 logger.debug(f"段 {i} LID 失敗: {e}")
                 seg_routings.append(("auto", 0.0, "lid_error"))
     else:
+        # 使用者明確指定語言（非 auto）時，指定值優先於逐段 LID：
+        # VoxLingua107 對漢語只有一個 "Chinese" 標籤，會高信心地把台語/粵語等
+        # 一律判成 zh，蓋掉使用者的選擇，專用 ASR（如台語 Breeze）就永遠走不到。
         seg_routings = [(user_hint, 1.0, "user_hint")] * len(chunks)
 
     fallback_routing = user_hint if user_hint != "auto" else "zh"
