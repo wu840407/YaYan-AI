@@ -123,6 +123,20 @@ def _dolphin_transcribe(
     res = _dolphin_mod.transcribe(
         audio, language_hint=routing, hotwords=_asr_hotwords(routing)
     )
+
+    # VoxLingua107 的標籤集裡沒有閩南語（只有 "Chinese"），Whisper LID 也沒有 nan，
+    # 所以自動模式永遠判不出台語，台語專用 ASR 形同虛設。
+    # Dolphin 自己有 zh-MINNAN 判定，拿它當觸發器把該段改交台語專用 ASR 重跑。
+    if (
+        CONFIG["asr"].get("enable_minnan_redirect", False)
+        and CONFIG["asr"].get("enable_taigi_asr", False)
+        and (res.detected_region or "").strip().upper() == "MINNAN"
+    ):
+        try:
+            logger.info("Dolphin 判定 region=MINNAN → 改走台語專用 ASR 重跑")
+            return _taigi_transcribe(audio, "nan", chunk_start_sec)
+        except Exception as e:
+            logger.warning(f"台語專用 ASR 失敗，沿用 Dolphin 結果：{e}")
     words = [
         WordTS(
             word=w.word,
