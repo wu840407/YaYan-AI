@@ -400,6 +400,64 @@ def glossary_for_text(text: str, source_lang: str = "any") -> str:
     return format_glossary_block(lookup(text, source_lang))
 
 
+# ──────────────────────────── ASR hotword 偏置 ────────────────────────────
+
+def hotwords_for_asr(source_lang: str = "any", limit: Optional[int] = None) -> List[str]:
+    """取術語庫詞條，供 ASR 解碼階段做 hotword 偏置。
+
+    與 lookup() 的差別：lookup 是拿「已經產生的逐字稿」去比對命中；這裡是逐字稿
+    還不存在的階段，沒有東西可比對，所以不做檢索，直接把整份詞表依優先度截斷後
+    交給解碼器偏置。
+
+    回傳的是**希望 ASR 輸出的字面**——correct 優先，缺才退回 term
+    （typo_fix 的 term 是錯字，拿去偏置等於教模型犯錯）。
+
+    任何失敗都回空 list：hotword 是加分項，絕不能讓它擋掉轉錄。
+    """
+    if limit is None:
+        try:
+            limit = int(_rag_cfg().get("max_asr_hotwords", 50) or 50)
+        except (TypeError, ValueError):
+            limit = 50
+    if limit <= 0:
+        return []
+
+    try:
+        rows = _load_cache()
+    except Exception as e:  # _load_cache 自己已吞例外，這裡是雙保險
+        logger.warning("ASR hotword 取詞失敗（本次不做偏置）：%s", e)
+        return []
+
+    # source_lang 未知/auto 時不做語言過濾——寧可多給幾個詞，也不要漏掉該偏置的
+    all_langs = (source_lang or "any").strip().lower() in ("", "any", "auto")
+
+    scored: List[Tuple[int, str]] = []
+    for r in rows:
+        if not all_langs and not _lang_ok(r.get("source_lang"), source_lang):
+            continue
+        w = (r.get("correct") or r.get("term") or "").strip()
+        w = _TAG_RE.sub("", w).strip()
+        if not w or _PUNCT_RE.match(w):
+            continue
+        if len(w) > 20:
+            # 過長的是整句改寫型 correction，不是詞彙，拿去偏置只會稀釋效果
+            continue
+        rank = TYPE_PRIORITY.get(r.get("term_type") or "", 0) + int(r.get("priority") or 0)
+        scored.append((rank, w))
+
+    scored.sort(key=lambda t: -t[0])
+    out: List[str] = []
+    seen: set = set()
+    for _, w in scored:
+        if w in seen:
+            continue
+        seen.add(w)
+        out.append(w)
+        if len(out) >= limit:
+            break
+    return out
+
+
 # ──────────────────────────── 校正學習（半自動）────────────────────────────
 
 def _good_pair(old: str, new: str) -> bool:

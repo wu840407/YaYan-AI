@@ -126,6 +126,7 @@ def transcribe(
     language_hint: Optional[str] = None,
     enable_word_timestamp: bool = True,
     sample_rate: int = 16000,
+    hotwords: Optional[List[str]] = None,
 ) -> DolphinResult:
     import dolphin
 
@@ -156,13 +157,26 @@ def transcribe(
         if enable_word_timestamp:
             kwargs["predict_time"] = True
 
+        # 術語庫偏置：Dolphin 自帶 context_module（hotword encoder），
+        # use_deep_biasing 才會真的走那條路徑，只給 hotwords 不開等於沒作用。
+        if hotwords:
+            kwargs["hotwords"] = list(hotwords)
+            kwargs["use_deep_biasing"] = True
+
         # 退化策略：region 不認 → 去掉 region 重試
         for retry in range(3):
             try:
                 result = dolphin.transcribe(model, audio_input, **kwargs)
                 break
             except TypeError:
-                kwargs.pop("predict_time", None)
+                # SDK 版本不接受某個選用參數 → 逐項退掉重試。
+                # 先退 hotword（加分項），predict_time 影響字級時間戳才是最後才動。
+                if "hotwords" in kwargs:
+                    logger.warning("Dolphin SDK 不接受 hotwords 參數，關閉偏置重試")
+                    kwargs.pop("hotwords", None)
+                    kwargs.pop("use_deep_biasing", None)
+                else:
+                    kwargs.pop("predict_time", None)
             except Exception as e:
                 emsg = str(e)
                 if "Unsupported language or region" in emsg and "region_sym" in kwargs:

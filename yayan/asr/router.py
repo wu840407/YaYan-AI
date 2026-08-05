@@ -82,11 +82,28 @@ def transcribe(
         return _whisper_transcribe(audio, routing, chunk_start_sec)
 
 
+def _asr_hotwords(routing: str) -> Optional[list]:
+    """術語庫 → ASR hotword 偏置詞表（開關 asr.enable_asr_hotwords，預設關）。
+
+    任何失敗都回 None＝不做偏置：術語庫掛掉不該讓轉錄跟著掛。
+    """
+    if not CONFIG["asr"].get("enable_asr_hotwords", False):
+        return None
+    try:
+        from ..glossary import hotwords_for_asr
+        return hotwords_for_asr(source_lang=routing or "any") or None
+    except Exception as e:
+        logger.warning(f"ASR hotword 取詞失敗，本段不偏置：{e}")
+        return None
+
+
 def _dolphin_transcribe(
     audio: np.ndarray, routing: str, chunk_start_sec: float,
 ) -> ASRResult:
     from . import dolphin as _dolphin_mod
-    res = _dolphin_mod.transcribe(audio, language_hint=routing)
+    res = _dolphin_mod.transcribe(
+        audio, language_hint=routing, hotwords=_asr_hotwords(routing)
+    )
     words = [
         WordTS(
             word=w.word,

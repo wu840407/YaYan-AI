@@ -28,6 +28,7 @@ asr:
   enable_lid_context: true       # v4.7-A：逐段 LID 借前後 context（短段信心提升）
   lid_context_sec: 1.5           # v4.7-A：LID 時前後各向完整音檔借的秒數
   enable_lid_ensemble: false     # v4.7-B：VoxLingua107 + Whisper LID 投票（預設關，待 baseline 驗證後再開）
+  enable_asr_hotwords: false    # ★ 預設 false：不做術語偏置，ASR 行為與既有完全相同
   enable_taigi_asr: true         # v4.7-C：台語(nan)改走專用 Breeze-ASR-26（已離線放入權重並驗證；缺失自動退回 Dolphin）
   taigi_routings: [nan, nan-cs, nan-hn]   # v4.7-C：觸發台語專用 ASR 的 routing key
   enable_diarize: true
@@ -125,6 +126,7 @@ speaker_id:
 rag:
   enable_rag: false                # ★ 預設 false：不檢索、不注入，翻譯 prompt 與既有逐字相同
   max_inject_terms: 20             # 每批最多注入幾條術語（避免稀釋 LLM 注意力）
+  max_asr_hotwords: 50             # ASR hotword 偏置最多取幾條（太多會稀釋偏置效果）
   enable_fuzzy: true               # 是否做模糊比對（difflib，無需 DB extension）
   fuzzy_threshold: 0.86            # 模糊命中相似度門檻（0~1，越高越嚴）
   fuzzy_min_len: 2                 # 術語正規化長度 < 此值不做模糊（避免單字亂配）
