@@ -19,6 +19,8 @@ logger = logging.getLogger("YaYan.Pipeline")
 
 SPEAKER_LABELS = ["A", "B", "C", "D", "E"]
 TRANSLATE_BATCH_LINES = 30   # ★ 每批翻譯 30 行（防 LLM 截斷）
+# enroll_unknown 自動建檔的語者名前綴；這類項目只是佔位，不可當識別結果顯示
+UNNAMED_SPEAKER_PREFIX = "未知語者_"
 
 
 @dataclass
@@ -172,6 +174,17 @@ def _identify_speakers(
             continue
 
         best = hits[0] if hits else None
+        # enroll_unknown 自動建的「未知語者_時間戳」只是待命名的佔位項，不是識別結果。
+        # 讓它參與比對是對的（同一人跨檔案能連起來），但**不可以拿它的名字當顯示名**——
+        # 否則逐字稿會出現 [未知語者_20260722_002834_SPEAKER_00 00:05-00:06] 這種標籤。
+        if best and str(best.get("name", "")).startswith(UNNAMED_SPEAKER_PREFIX):
+            mapping[label] = fallback
+            logger.info(
+                f"語者 {label} → 命中未命名語者 {best['name']}"
+                f"（sim={best['similarity']:.2f}），顯示仍用 {fallback}"
+            )
+            continue
+
         if best and best["similarity"] >= th_high:
             mapping[label] = best["name"]
             logger.info(
@@ -190,7 +203,7 @@ def _identify_speakers(
                 try:
                     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                     speaker_db.add_speaker(
-                        f"未知語者_{ts}_{label}", vec,
+                        f"{UNNAMED_SPEAKER_PREFIX}{ts}_{label}", vec,
                         note="自動建檔待命名", source="auto",
                     )
                 except Exception as e:
