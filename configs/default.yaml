@@ -128,7 +128,10 @@ speaker_id:
   threshold_mid: 0.55              # similarity ≥ → 標「疑似_張三(0.65)」，以下退回 A方
   top_k: 5                         # 相似度搜尋取前 k 筆
   hnsw_ef_search: 100              # HNSW 查詢 ef_search（越大越準越慢）
-  enroll_unknown: true             # 辨識不出時自動建「未知語者_時間戳」待命名
+  # ★ 預設 false：辨識不出就用 A/B/C 匿名標籤，不自動建檔。
+  # 自動建檔的佔位項會被當成正常語者比對命中，把佔位字串寫進逐字稿；
+  # 語者請改由「語者管理」分頁上傳音檔人工建檔。
+  enroll_unknown: false
 
 # V5.0 M3：特殊字詞 RAG 術語庫（只在 prompt 層注入，不碰 LLM 後端）
 rag:
@@ -139,6 +142,11 @@ rag:
   enable_fuzzy: true               # 是否做模糊比對（difflib，無需 DB extension）
   fuzzy_threshold: 0.86            # 模糊命中相似度門檻（0~1，越高越嚴）
   fuzzy_min_len: 2                 # 術語正規化長度 < 此值不做模糊（避免單字亂配）
+  # 疑似專名誤植提示：只對 proper_noun 套用較鬆門檻，只提示不替換。
+  # ⚠️ 0.60 會讓「王建華」與「王建國」互相命中，開啟前請確認可接受。
+  enable_name_fuzzy_hint: false
+  name_fuzzy_threshold: 0.60
+  max_name_hints: 10
   db:                              # 沿用 M2 的 yayan_voiceprint DB，新增 glossary_terms 表
     host: localhost
     port: 5432

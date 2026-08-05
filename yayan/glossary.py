@@ -345,6 +345,84 @@ def _best_window_ratio(text: str, term: str) -> float:
     return best
 
 
+def _best_window(text: str, term: str) -> Tuple[float, str]:
+    """同 _best_window_ratio，但一併回傳命中的原文片段（供提示顯示用）。"""
+    L = len(term)
+    if L == 0 or len(text) < L:
+        return 0.0, ""
+    tset = set(term)
+    best, best_w, best_aligned = 0.0, "", -1
+    sm = SequenceMatcher()
+    sm.set_seq2(term)
+    for i in range(len(text) - L + 1):
+        w = text[i:i + L]
+        if not (set(w) & tset):
+            continue
+        sm.set_seq1(w)
+        r = sm.ratio()
+        # 同分時用「逐位對齊字數」決勝：「藍海濤」對上「藍海滔」與「是藍海」的
+        # difflib 相似度都是 0.67，但前者前兩字同位相同、後者完全錯位。
+        # 不做這個決勝會提示出「文中的『是藍海』可能是『藍海濤』」這種看不懂的話。
+        aligned = sum(1 for a, b in zip(w, term) if a == b)
+        if r > best or (r == best and aligned > best_aligned):
+            best, best_w, best_aligned = r, w, aligned
+            if best >= 0.999:
+                break
+    return best, best_w
+
+
+def name_hints(text: str, source_lang: str = "any") -> List[Dict]:
+    """找出文中「疑似專名誤植」的片段（開關 rag.enable_name_fuzzy_hint，預設關）。
+
+    為什麼要獨立一套門檻：三字人名差一個字的相似度是 0.67，遠低於一般術語用的
+    fuzzy_threshold（0.86），所以人名的誤植永遠比對不到。這裡只對 proper_noun
+    套用較鬆的 name_fuzzy_threshold，不動一般術語的門檻。
+
+    ⚠️ 放鬆門檻的代價是會把「不同的人」配在一起——「王建華」與「王建國」相似度
+    同樣是 0.67。因此本函式**只產生『可能是』的提示交給 LLM 依語境判斷**，
+    絕不做替換，也不進 correction_pairs。人員身分的最終判斷仍在人。
+    """
+    cfg = _rag_cfg()
+    if not cfg.get("enable_name_fuzzy_hint", False) or not text:
+        return []
+    th = float(cfg.get("name_fuzzy_threshold", 0.60))
+    limit = int(cfg.get("max_name_hints", 10))
+
+    clean = _TAG_RE.sub(" ", text)
+    norm_text = _norm(clean)
+    out: List[Dict] = []
+    seen: set = set()
+    for t in _load_cache():
+        if (t.get("term_type") or "") != "proper_noun":
+            continue
+        if not _lang_ok(t.get("source_lang"), source_lang):
+            continue
+        term = (t.get("term") or "").strip()
+        canonical = (t.get("correct") or term).strip()
+        if len(term) < 2:
+            continue
+        if term in clean:
+            continue                      # 已經是正確寫法，不需要提示
+        r, w = _best_window(norm_text, _norm(term))
+        if r < th or r >= 0.999 or not w or w in seen:
+            continue
+        seen.add(w)
+        out.append({"found": w, "canonical": canonical, "score": round(r, 2)})
+    out.sort(key=lambda h: -h["score"])
+    return out[:limit]
+
+
+def format_name_hints(hints: List[Dict]) -> str:
+    if not hints:
+        return ""
+    lines = ["【疑似專名誤植，請依語境判斷是否為同一對象；不確定就保留原文】"]
+    for h in hints:
+        lines.append(
+            f"- 文中的「{h['found']}」可能是「{h['canonical']}」（相似度 {h['score']}）"
+        )
+    return "\n".join(lines) + "\n\n"
+
+
 def lookup(text: str, source_lang: str = "any") -> List[Dict]:
     """檢索本段文字命中的術語，已排序並套用注入上限。開關關閉時呼叫端不應呼叫本函式。"""
     if not text:
@@ -388,6 +466,10 @@ def format_glossary_block(hits: List[Dict]) -> str:
     for h in hits:
         note = f"（{h['note']}）" if h.get("note") else ""
         if h["term_type"] == "proper_noun":
+            # term 與 correct 相同的專名（例如語者姓名）產生的是「X 一律譯為 X」，
+            # 對 LLM 沒有任何指示作用，只會吃掉 max_inject_terms 的額度。
+            if (h.get("term") or "").strip() == (h.get("correct") or "").strip():
+                continue
             lines.append(f"- 「{h['term']}」一律譯為「{h['correct']}」{note}")
         else:
             label = TYPE_LABEL.get(h["term_type"], "校正")
@@ -396,8 +478,17 @@ def format_glossary_block(hits: List[Dict]) -> str:
 
 
 def glossary_for_text(text: str, source_lang: str = "any") -> str:
-    """便捷組合：檢索 + 格式化，回傳可直接填入 {glossary} 的字串。"""
-    return format_glossary_block(lookup(text, source_lang))
+    """便捷組合：檢索 + 格式化，回傳可直接填入 {glossary} 的字串。
+
+    含兩段：術語對照表（確定的譯法）＋疑似專名誤植提示（不確定，交 LLM 判斷）。
+    後者需 rag.enable_name_fuzzy_hint 開啟，預設關＝與既有行為逐字相同。
+    """
+    block = format_glossary_block(lookup(text, source_lang))
+    try:
+        block += format_name_hints(name_hints(text, source_lang))
+    except Exception as e:
+        logger.warning("專名提示產生失敗，略過：%s", e)
+    return block
 
 
 # ─────────────────────── ASR 後處理：確定性術語替換 ───────────────────────
