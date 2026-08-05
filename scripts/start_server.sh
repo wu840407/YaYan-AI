@@ -53,11 +53,32 @@ if [ "$LLM_BACKEND" = "openai" ]; then
   MAX_LEN="$(python -c "from yayan.config import CONFIG; print(CONFIG['llm'].get('max_model_len',4096))")"
   GPU_UTIL="$(python -c "from yayan.config import CONFIG; print(CONFIG['llm'].get('gpu_memory_utilization',0.85))")"
 
-  if ! command -v vllm >/dev/null 2>&1; then
-    echo "❌ 設定為 backend: openai 但找不到 vllm 指令。"
+  LLM_FLAVOR="$(python -c "from yayan.config import CONFIG; print((CONFIG['llm'].get('openai_flavor') or 'vllm').lower())")"
+  echo "ℹ️  LLM flavor = $LLM_FLAVOR"
+
+  if [ "$LLM_FLAVOR" = "llamacpp" ]; then
+    # llama.cpp server 由獨立的 yayan-llm.service 常駐，本腳本不代管它的生命週期，
+    # 只做可用性檢查——連不上就直接失敗，避免 app 上線後翻譯功能默默壞掉。
+    echo "⏳ 等待 llama.cpp server 健康檢查 (最多 180 秒)…"
+    LLM_READY=0
+    for i in $(seq 1 60); do
+      if curl -fsS "http://127.0.0.1:$LLM_PORT/v1/models" >/dev/null 2>&1; then
+        echo "✅ llama.cpp server 已就緒"
+        LLM_READY=1
+        break
+      fi
+      sleep 3
+    done
+    if [ "$LLM_READY" -ne 1 ]; then
+      echo "❌ llama.cpp server 未在 port $LLM_PORT 回應。"
+      echo "   請確認：sudo systemctl status yayan-llm"
+      exit 1
+    fi
+  elif ! command -v vllm >/dev/null 2>&1; then
+    echo "❌ 設定為 backend: openai + flavor: vllm 但找不到 vllm 指令。"
     echo "   請：pip install 'vllm==0.6.4.post1' 'openai>=1.40.0' 'numpy<2.0'"
     exit 1
-  fi
+  else
 
   # 檢查 vllm 版本，避免拿到 v1 引擎
   VLLM_VER="$(python -c 'import vllm; print(vllm.__version__)' 2>/dev/null || echo "unknown")"
@@ -108,6 +129,7 @@ if [ "$LLM_BACKEND" = "openai" ]; then
     fi
     sleep 3
   done
+  fi
 fi
 
 # 啟動主 app（Gradio）
